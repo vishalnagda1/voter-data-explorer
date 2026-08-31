@@ -1,0 +1,20 @@
+# Local Python environment and caches
+.venv-voter/
+__pycache__/
+*.py[cod]
+
+# Downloaded OCR language data
+tessdata/
+
+# Input documents and generated voter data
+PDFs/
+CSVs/
+voter_csv/
+outputs/
+tmp/
+*.pdf
+*.csv
+*.validation.json
+
+# macOS metadata
+.DS_Store
