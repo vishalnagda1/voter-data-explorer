@@ -1,0 +1,1445 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Private, local voter CSV search, filtering, analytics, and A4 reporting.">
+  <title>मतदाता दृष्टि · Voter Data Explorer</title>
+  <style>
+    :root {
+      --ink: #172a32;
+      --muted: #66777d;
+      --paper: #f5f1e8;
+      --surface: #fffdf8;
+      --line: #d9d5ca;
+      --teal: #176b68;
+      --teal-dark: #0e4f4d;
+      --teal-soft: #dceceb;
+      --saffron: #d88632;
+      --saffron-soft: #f7e7d1;
+      --rose: #a64f4f;
+      --rose-soft: #f3dddd;
+      --blue: #3e6685;
+      --green: #3d7a56;
+      --shadow: 0 14px 35px rgba(23, 42, 50, .08);
+      --radius: 16px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        radial-gradient(circle at 90% -20%, rgba(216, 134, 50, .13), transparent 30rem),
+        linear-gradient(180deg, #f7f4ed 0, var(--paper) 100%);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans Devanagari", sans-serif;
+      font-size: 14px;
+    }
+
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+    [hidden] { display: none !important; }
+
+    .app-header {
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 13px clamp(18px, 4vw, 56px);
+      color: #f9f7f0;
+      background: rgba(17, 53, 57, .96);
+      border-bottom: 1px solid rgba(255,255,255,.14);
+      backdrop-filter: blur(14px);
+    }
+
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 38px;
+      height: 38px;
+      flex: 0 0 auto;
+      border-radius: 11px;
+      color: #193a3d;
+      background: #f3c67a;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 20px;
+      font-weight: 800;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.42);
+    }
+    .brand strong { display: block; font-size: 15px; letter-spacing: .01em; }
+    .brand span { display: block; margin-top: 1px; color: #bcd1ce; font-size: 11px; }
+    .header-actions { display: flex; align-items: center; gap: 10px; }
+    .privacy-note { color: #c9dbd8; font-size: 12px; white-space: nowrap; }
+    .privacy-note::before { content: "●"; margin-right: 7px; color: #83c699; }
+
+    main { width: min(1560px, calc(100% - 36px)); margin: 0 auto; padding: 30px 0 58px; }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(340px, .85fr);
+      gap: 24px;
+      align-items: stretch;
+      margin-bottom: 24px;
+    }
+    .hero-copy {
+      position: relative;
+      overflow: hidden;
+      padding: clamp(28px, 5vw, 54px);
+      min-height: 300px;
+      color: #f8f4e9;
+      background: #173f42;
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+    }
+    .hero-copy::after {
+      content: "";
+      position: absolute;
+      right: -90px;
+      bottom: -120px;
+      width: 330px;
+      height: 330px;
+      border: 44px solid rgba(243,198,122,.13);
+      border-radius: 50%;
+    }
+    .eyebrow {
+      margin: 0 0 16px;
+      color: #f1c87f;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+    h1 {
+      position: relative;
+      z-index: 1;
+      max-width: 700px;
+      margin: 0;
+      font-family: Georgia, "Noto Serif Devanagari", serif;
+      font-size: clamp(34px, 5vw, 66px);
+      font-weight: 500;
+      line-height: .98;
+      letter-spacing: -.035em;
+    }
+    .hero-copy > p:last-child {
+      position: relative;
+      z-index: 1;
+      max-width: 620px;
+      margin: 22px 0 0;
+      color: #cadbd8;
+      font-size: 15px;
+      line-height: 1.65;
+    }
+
+    .drop-zone {
+      display: grid;
+      place-items: center;
+      align-content: center;
+      min-height: 300px;
+      padding: 28px;
+      text-align: center;
+      background: var(--surface);
+      border: 1.5px dashed #9baca8;
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+      transition: border-color .2s, background .2s, transform .2s;
+    }
+    .drop-zone.dragging { border-color: var(--saffron); background: #fff8ec; transform: translateY(-2px); }
+    .drop-icon {
+      display: grid;
+      place-items: center;
+      width: 58px;
+      height: 58px;
+      margin-bottom: 17px;
+      border-radius: 50%;
+      color: var(--teal);
+      background: var(--teal-soft);
+      font-size: 27px;
+      font-weight: 300;
+    }
+    .drop-zone h2 { margin: 0 0 8px; font-family: Georgia, serif; font-size: 24px; font-weight: 600; }
+    .drop-zone p { max-width: 380px; margin: 0 0 18px; color: var(--muted); line-height: 1.55; }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 38px;
+      padding: 8px 14px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      color: var(--ink);
+      background: #ece9e1;
+      font-weight: 720;
+      font-size: 13px;
+      line-height: 1;
+      transition: transform .15s, box-shadow .15s, background .15s;
+    }
+    .btn:hover { transform: translateY(-1px); box-shadow: 0 5px 14px rgba(23,42,50,.1); }
+    .btn:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
+      outline: 3px solid rgba(216,134,50,.32);
+      outline-offset: 2px;
+    }
+    .btn-primary { color: #fff; background: var(--teal); }
+    .btn-primary:hover { background: var(--teal-dark); }
+    .btn-light { color: #163b3e; background: #f4cc87; }
+    .btn-ghost { background: transparent; border-color: var(--line); }
+    .btn-danger { color: var(--rose); background: transparent; border-color: #dfc7c3; }
+    .btn-small { min-height: 32px; padding: 6px 10px; font-size: 12px; }
+
+    .workspace { display: grid; gap: 18px; }
+    .file-rail {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      overflow-x: auto;
+      padding: 2px 0 5px;
+      scrollbar-width: thin;
+    }
+    .file-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex: 0 0 auto;
+      max-width: 320px;
+      padding: 8px 10px 8px 12px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      box-shadow: 0 3px 10px rgba(23,42,50,.04);
+    }
+    .file-chip b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+    .file-chip span { color: var(--muted); font-size: 11px; }
+    .file-chip button { padding: 0; color: var(--muted); background: none; border: 0; font-size: 17px; }
+
+    .kpi-strip {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(120px, 1fr));
+      overflow: hidden;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+    .kpi {
+      min-width: 0;
+      padding: 18px 20px;
+      border-right: 1px solid var(--line);
+    }
+    .kpi:last-child { border-right: 0; }
+    .kpi-label { display: block; margin-bottom: 7px; color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+    .kpi-value { display: block; font-family: Georgia, serif; font-size: clamp(24px, 2.4vw, 34px); line-height: 1; }
+    .kpi small { display: block; overflow: hidden; margin-top: 6px; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: 0 7px 22px rgba(23,42,50,.05);
+    }
+    .filter-panel { padding: 18px; }
+    .filter-grid {
+      display: grid;
+      grid-template-columns: minmax(250px, 2fr) repeat(4, minmax(125px, 1fr));
+      gap: 11px;
+      align-items: end;
+    }
+    .field { display: grid; gap: 6px; min-width: 0; }
+    .field label { color: var(--muted); font-size: 11px; font-weight: 750; }
+    input[type="search"], input[type="text"], input[type="number"], select {
+      width: 100%;
+      height: 40px;
+      padding: 0 11px;
+      color: var(--ink);
+      background: #fff;
+      border: 1px solid #cfcbc1;
+      border-radius: 9px;
+    }
+    input[type="checkbox"], input[type="radio"] { accent-color: var(--teal); }
+    .search-wrap { position: relative; }
+    .search-wrap input { padding-left: 35px; }
+    .search-wrap::before { content: "⌕"; position: absolute; left: 12px; top: 7px; color: var(--teal); font-size: 22px; line-height: 1; }
+    .age-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+    .filter-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; }
+    .filter-buttons, .active-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .active-chip { padding: 5px 9px; color: var(--teal-dark); background: var(--teal-soft); border-radius: 999px; font-size: 11px; font-weight: 700; }
+
+    .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin: 7px 2px 0; }
+    .section-heading h2 { margin: 0; font-family: Georgia, serif; font-size: 26px; font-weight: 600; }
+    .section-heading p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .section-heading .stamp { color: var(--muted); font-size: 11px; }
+    .section-heading-actions { display: flex; align-items: center; gap: 9px; }
+
+    .analytics-grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 14px;
+    }
+    .chart-card { grid-column: span 3; min-height: 265px; padding: 18px; }
+    .chart-card.wide { grid-column: span 6; }
+    .chart-title { display: flex; align-items: start; justify-content: space-between; gap: 8px; margin-bottom: 16px; }
+    .chart-title h3 { margin: 0; font-size: 14px; }
+    .chart-title span { color: var(--muted); font-size: 11px; }
+    .donut-layout { display: grid; grid-template-columns: 130px 1fr; gap: 16px; align-items: center; }
+    .donut {
+      position: relative;
+      width: 130px;
+      aspect-ratio: 1;
+      border-radius: 50%;
+      background: #e7e3da;
+    }
+    .donut::after { content: ""; position: absolute; inset: 24%; border-radius: 50%; background: var(--surface); }
+    .donut-center { position: absolute; inset: 0; z-index: 1; display: grid; place-content: center; text-align: center; pointer-events: none; }
+    .donut-center b { font-family: Georgia, serif; font-size: 22px; }
+    .donut-center span { color: var(--muted); font-size: 10px; }
+    .legend { display: grid; gap: 10px; min-width: 0; }
+    .legend-row { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: 12px; }
+    .legend-row i { width: 9px; height: 9px; border-radius: 50%; }
+    .legend-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .legend-row b { font-variant-numeric: tabular-nums; }
+    .bars { display: grid; gap: 10px; }
+    .bar-row { display: grid; grid-template-columns: minmax(72px, 1fr) 4fr auto; gap: 9px; align-items: center; font-size: 11px; }
+    .bar-label { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+    .bar-track { height: 9px; overflow: hidden; background: #e9e5dc; border-radius: 999px; }
+    .bar-fill { height: 100%; min-width: 2px; background: var(--teal); border-radius: inherit; }
+    .bar-value { min-width: 34px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .quality-list { display: grid; gap: 11px; }
+    .quality-item { display: grid; grid-template-columns: 1fr auto; gap: 5px 10px; align-items: center; }
+    .quality-item span { color: var(--muted); font-size: 12px; }
+    .quality-item b { font-size: 13px; }
+    .quality-meter { grid-column: 1 / -1; height: 5px; overflow: hidden; background: #ece8df; border-radius: 999px; }
+    .quality-meter i { display: block; height: 100%; background: var(--saffron); border-radius: inherit; }
+
+    .data-panel { overflow: hidden; }
+    .data-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px 17px; border-bottom: 1px solid var(--line); }
+    .data-title { min-width: 0; }
+    .data-title h2 { margin: 0; font-family: Georgia, serif; font-size: 22px; font-weight: 600; }
+    .data-title p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+    .toolbar-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+    .table-wrap { overflow: auto; max-height: 610px; }
+    table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; }
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 3;
+      padding: 10px 11px;
+      color: #f7f4ed;
+      background: #25494c;
+      border-bottom: 1px solid #17393c;
+      text-align: left;
+      font-size: 10px;
+      letter-spacing: .035em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    th:first-child { left: 0; z-index: 4; }
+    th button { padding: 0; color: inherit; background: none; border: 0; font: inherit; letter-spacing: inherit; text-transform: inherit; }
+    td { max-width: 260px; padding: 9px 11px; background: #fffdf9; border-bottom: 1px solid #e7e3da; vertical-align: top; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    tbody tr:nth-child(even) td { background: #faf8f2; }
+    tbody tr:hover td { background: #f1f7f6; }
+    td:first-child { position: sticky; left: 0; z-index: 2; width: 42px; text-align: center; }
+    .hindi { font-family: "Noto Sans Devanagari", "Kohinoor Devanagari", sans-serif; font-size: 13px; }
+    .pill { display: inline-flex; align-items: center; padding: 3px 7px; border-radius: 999px; font-size: 10px; font-weight: 800; }
+    .pill-active, .pill-no { color: #27603e; background: #dfeee4; }
+    .pill-deleted, .pill-yes { color: #8d3f3f; background: #f3dddd; }
+    .pill-men { color: #315a79; background: #dde9f1; }
+    .pill-women { color: #824c68; background: #f1e0e9; }
+    .empty-table { padding: 58px 20px; color: var(--muted); text-align: center; }
+    .pagination { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 17px; background: #faf8f2; border-top: 1px solid var(--line); }
+    .page-controls { display: flex; align-items: center; gap: 7px; }
+    .pagination span { color: var(--muted); font-size: 11px; }
+
+    dialog {
+      width: min(920px, calc(100% - 28px));
+      max-height: min(86vh, 820px);
+      padding: 0;
+      color: var(--ink);
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 28px 80px rgba(18,39,44,.3);
+    }
+    dialog::backdrop { background: rgba(12,31,35,.58); backdrop-filter: blur(3px); }
+    .dialog-head { display: flex; align-items: start; justify-content: space-between; gap: 20px; padding: 20px 22px 15px; border-bottom: 1px solid var(--line); }
+    .dialog-head h2 { margin: 0; font-family: Georgia, serif; font-size: 24px; }
+    .dialog-head p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+    .dialog-close { padding: 0; width: 32px; height: 32px; color: var(--muted); background: transparent; border: 1px solid var(--line); border-radius: 50%; font-size: 20px; }
+    .dialog-body { overflow: auto; max-height: 62vh; padding: 20px 22px; }
+    .dialog-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 22px; border-top: 1px solid var(--line); background: #faf8f2; }
+    .dialog-actions { display: flex; align-items: center; gap: 8px; }
+    .modal-section + .modal-section { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--line); }
+    .modal-section h3 { margin: 0 0 5px; font-size: 14px; }
+    .modal-section > p { margin: 0 0 12px; color: var(--muted); font-size: 11px; }
+    .preset-row { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 12px; }
+    .column-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 12px; }
+    .check-item { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto; align-items: center; gap: 7px; min-width: 0; padding: 7px 8px; border: 1px solid transparent; border-radius: 8px; }
+    .check-item:hover { background: var(--teal-soft); }
+    .check-item span { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+    .check-item.is-selected { background: #f7fbfa; border-color: #cfe0de; }
+    .check-item.dragging { opacity: .45; }
+    .sequence-badge { display: grid; place-items: center; width: 22px; height: 22px; color: var(--teal-dark); background: var(--teal-soft); border-radius: 7px; font-size: 10px; font-weight: 800; }
+    .move-button { width: 26px; height: 26px; padding: 0; color: var(--muted); background: #fff; border: 1px solid var(--line); border-radius: 7px; line-height: 1; }
+    .move-button:disabled { cursor: default; opacity: .3; }
+    .proxy-note { margin-top: 13px; padding: 9px 11px; color: #725126; background: var(--saffron-soft); border-radius: 9px; font-size: 10px; line-height: 1.45; }
+    .print-options { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .option-card { padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+    .option-card label { display: flex; gap: 8px; font-weight: 700; }
+    .option-card p { margin: 5px 0 0 24px; color: var(--muted); font-size: 11px; }
+    .orientation-badge { display: inline-flex; padding: 5px 9px; color: var(--teal-dark); background: var(--teal-soft); border-radius: 999px; font-size: 11px; font-weight: 800; }
+
+    .rule-row { display: grid; grid-template-columns: 1.1fr .8fr 1.4fr auto; gap: 8px; margin-bottom: 9px; }
+    .rule-row button { width: 40px; height: 40px; color: var(--rose); background: transparent; border: 1px solid #dfc7c3; border-radius: 9px; }
+    .advanced-empty { padding: 22px; color: var(--muted); background: #faf8f2; border: 1px dashed var(--line); border-radius: 10px; text-align: center; font-size: 12px; }
+
+    .toast {
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      z-index: 100;
+      max-width: 360px;
+      padding: 12px 15px;
+      color: #fff;
+      background: #173f42;
+      border-radius: 11px;
+      box-shadow: 0 12px 38px rgba(17,45,49,.28);
+      font-size: 12px;
+      opacity: 0;
+      transform: translateY(12px);
+      pointer-events: none;
+      transition: opacity .2s, transform .2s;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+
+    .print-area { display: none; }
+
+    @media (max-width: 1180px) {
+      .filter-grid { grid-template-columns: 2fr repeat(3, 1fr); }
+      .kpi-strip { grid-template-columns: repeat(3, 1fr); }
+      .kpi:nth-child(3) { border-right: 0; }
+      .kpi:nth-child(-n+3) { border-bottom: 1px solid var(--line); }
+      .chart-card { grid-column: span 6; }
+    }
+
+    @media (max-width: 760px) {
+      .app-header { padding: 11px 14px; }
+      .privacy-note { display: none; }
+      main { width: min(100% - 22px, 1560px); padding-top: 16px; }
+      .hero { grid-template-columns: 1fr; }
+      .hero-copy { min-height: 235px; padding: 32px 25px; }
+      .drop-zone { min-height: 240px; }
+      .filter-grid { grid-template-columns: 1fr 1fr; }
+      .field-search { grid-column: 1 / -1; }
+      .filter-actions, .data-toolbar, .dialog-foot { align-items: stretch; flex-direction: column; }
+      .filter-buttons, .toolbar-actions, .dialog-actions { width: 100%; }
+      .toolbar-actions .btn, .dialog-actions .btn { flex: 1; }
+      .kpi-strip { grid-template-columns: repeat(2, 1fr); }
+      .kpi:nth-child(3) { border-right: 1px solid var(--line); }
+      .kpi:nth-child(even) { border-right: 0; }
+      .kpi:nth-child(-n+4) { border-bottom: 1px solid var(--line); }
+      .analytics-grid { grid-template-columns: 1fr; }
+      .chart-card, .chart-card.wide { grid-column: 1; }
+      .column-grid { grid-template-columns: 1fr; }
+      .print-options { grid-template-columns: 1fr; }
+      .rule-row { grid-template-columns: 1fr 1fr 40px; }
+      .rule-value { grid-column: 1 / 3; grid-row: 2; }
+      .rule-row button { grid-column: 3; grid-row: 1 / 3; height: 100%; }
+    }
+
+    @media print {
+      body { background: #fff !important; color: #000; font-family: Arial, "Noto Sans Devanagari", sans-serif; }
+      body > :not(.print-area) { display: none !important; }
+      .print-area { display: block !important; }
+      .print-title { display: flex; align-items: end; justify-content: space-between; gap: 10mm; padding-bottom: 3mm; border-bottom: .4mm solid #163e42; }
+      .print-title h1 { margin: 0; color: #000; font-family: Georgia, serif; font-size: 15pt; letter-spacing: 0; }
+      .print-title p { margin: 1mm 0 0; color: #444; font-size: 7.5pt; }
+      .print-meta { text-align: right; font-size: 7pt; }
+      .print-summary { margin: 3mm 0; padding: 2.5mm 3mm; background: #f2f2f2; border: .2mm solid #ccc; font-size: 7.5pt; }
+      .print-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--print-font-size, 7.5pt); }
+      .print-table thead { display: table-header-group; }
+      .print-table tr { break-inside: avoid; }
+      .print-table th { position: static; padding: 1.5mm; color: #fff; background: #204a4d !important; border: .2mm solid #333; font-size: calc(var(--print-font-size, 7.5pt) - 1pt); white-space: normal; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      .print-table td { position: static; max-width: none; padding: 1.3mm 1.5mm; color: #000; background: #fff !important; border: .2mm solid #aaa; white-space: normal; overflow: visible; font-size: inherit; word-break: break-word; }
+      .print-footer { margin-top: 3mm; color: #555; font-size: 7pt; }
+    }
+  </style>
+  <style id="printPageStyle">@page { size: A4 portrait; margin: 10mm; }</style>
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">म</div>
+      <div><strong>मतदाता दृष्टि</strong><span>Voter data explorer</span></div>
+    </div>
+    <div class="header-actions">
+      <span class="privacy-note">Local &amp; private — files never leave this browser</span>
+      <button class="btn btn-ghost" id="resetAllButton" type="button" style="color:#f7f4ed;border-color:rgba(255,255,255,.26)">Reset settings</button>
+      <button class="btn btn-light" id="headerLoadButton" type="button">＋ Add CSVs</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero" id="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Private analytics workspace</p>
+        <h1>Search the roll.<br>See the whole picture.</h1>
+        <p>Combine one or many voter CSV files, investigate every field, and turn the current filtered view into an A4-ready report—without uploading personal data anywhere.</p>
+      </div>
+      <div class="drop-zone" id="dropZone" tabindex="0" role="button" aria-label="Choose or drop voter CSV files">
+        <div class="drop-icon" aria-hidden="true">↓</div>
+        <h2>Select voter CSV files</h2>
+        <p>Choose all processed parts together. Different but compatible column sets are reconciled automatically.</p>
+        <button class="btn btn-primary" id="chooseFilesButton" type="button">Choose one or more CSVs</button>
+        <input id="fileInput" type="file" accept=".csv,text/csv" multiple hidden>
+      </div>
+    </section>
+
+    <section class="workspace" id="workspace" hidden>
+      <div class="file-rail" id="fileRail" aria-label="Loaded CSV files"></div>
+
+      <section class="kpi-strip" aria-label="Filtered voter summary">
+        <div class="kpi"><span class="kpi-label">Matching voters</span><strong class="kpi-value" id="kpiTotal">0</strong><small id="kpiLoaded">of 0 loaded</small></div>
+        <div class="kpi"><span class="kpi-label">Active</span><strong class="kpi-value" id="kpiActive">0</strong><small id="kpiActivePct">0%</small></div>
+        <div class="kpi"><span class="kpi-label">Deleted</span><strong class="kpi-value" id="kpiDeleted">0</strong><small id="kpiDeletedPct">0%</small></div>
+        <div class="kpi"><span class="kpi-label">Average age</span><strong class="kpi-value" id="kpiAge">—</strong><small id="kpiAgeRange">No age values</small></div>
+        <div class="kpi"><span class="kpi-label">Unique voter IDs</span><strong class="kpi-value" id="kpiUnique">0</strong><small id="kpiDuplicate">0 duplicate IDs</small></div>
+        <div class="kpi"><span class="kpi-label">Needs review</span><strong class="kpi-value" id="kpiReview">0</strong><small id="kpiReviewPct">0% of matching</small></div>
+      </section>
+
+      <section class="panel filter-panel" aria-label="Voter data filters">
+        <div class="filter-grid">
+          <div class="field field-search">
+            <label for="globalSearch">Search every field</label>
+            <div class="search-wrap"><input id="globalSearch" type="search" placeholder="Name, voter ID, relative, address…" autocomplete="off"></div>
+          </div>
+          <div class="field"><label for="lastNameHindiFilter">Last name (Hindi)</label><input id="lastNameHindiFilter" type="text" list="lastNameHindiOptions" placeholder="उपनाम" autocomplete="off"><datalist id="lastNameHindiOptions"></datalist></div>
+          <div class="field"><label for="lastNameEnglishFilter">Last name (English)</label><input id="lastNameEnglishFilter" type="text" list="lastNameEnglishOptions" placeholder="Surname" autocomplete="off"><datalist id="lastNameEnglishOptions"></datalist></div>
+          <div class="field"><label for="statusFilter">Status</label><select id="statusFilter"><option value="">All statuses</option></select></div>
+          <div class="field"><label for="genderFilter">Gender</label><select id="genderFilter"><option value="">All genders</option></select></div>
+          <div class="field"><label for="partFilter">Part</label><select id="partFilter"><option value="">All parts</option></select></div>
+          <div class="field"><label for="relationFilter">Relation</label><select id="relationFilter"><option value="">All relations</option></select></div>
+          <div class="field"><label for="sourceFilter">Source CSV</label><select id="sourceFilter"><option value="">All files</option></select></div>
+          <div class="field"><label>Age range</label><div class="age-fields"><input id="ageMin" type="number" min="0" max="130" placeholder="Min" aria-label="Minimum age"><input id="ageMax" type="number" min="0" max="130" placeholder="Max" aria-label="Maximum age"></div></div>
+        </div>
+        <div class="filter-actions">
+          <div class="active-chips" id="activeChips" aria-live="polite"><span class="active-chip">No filters applied</span></div>
+          <div class="filter-buttons">
+            <select id="reviewFilter" aria-label="Review state"><option value="">All quality states</option><option value="clean">No review flags</option><option value="any">Any review flag</option><option value="ocr">OCR review</option><option value="split">Name split review</option><option value="english">English spelling review</option></select>
+            <button class="btn btn-ghost" id="advancedButton" type="button">Advanced filters <span id="advancedCount"></span></button>
+            <button class="btn btn-ghost" id="resetFiltersButton" type="button">Reset filters</button>
+          </div>
+        </div>
+      </section>
+
+      <div class="section-heading">
+        <div><h2>Live analytics</h2><p>Every metric updates from the current filtered population.</p></div>
+        <div class="section-heading-actions"><span class="stamp" id="analyticsStamp"></span><button class="btn btn-small btn-ghost" id="resetAnalyticsButton" type="button">Reset analytics</button></div>
+      </div>
+
+      <section class="analytics-grid" aria-label="Voter analytics dashboard">
+        <article class="panel chart-card"><div class="chart-title"><h3>Gender distribution</h3><span id="genderSubtitle"></span></div><div class="donut-layout"><div class="donut" id="genderDonut"><div class="donut-center"><b id="genderCenter">0</b><span>voters</span></div></div><div class="legend" id="genderLegend"></div></div></article>
+        <article class="panel chart-card"><div class="chart-title"><h3>Roll status</h3><span>active vs deleted</span></div><div class="donut-layout"><div class="donut" id="statusDonut"><div class="donut-center"><b id="statusCenter">0</b><span>records</span></div></div><div class="legend" id="statusLegend"></div></div></article>
+        <article class="panel chart-card wide"><div class="chart-title"><h3>Age profile</h3><span id="ageSubtitle"></span></div><div class="bars" id="ageBars"></div></article>
+        <article class="panel chart-card wide"><div class="chart-title"><h3>Records by part</h3><span>largest parts first</span></div><div class="bars" id="partBars"></div></article>
+        <article class="panel chart-card wide"><div class="chart-title"><h3>Surname distribution</h3><span id="surnameSubtitle">English / Hindi last name</span></div><div class="bars" id="surnameBars"></div><div class="proxy-note">Surname counts are a community-name proxy only. They do not verify or determine any voter’s caste.</div></article>
+        <article class="panel chart-card"><div class="chart-title"><h3>Relationship type</h3><span>top categories</span></div><div class="bars" id="relationBars"></div></article>
+        <article class="panel chart-card"><div class="chart-title"><h3>Data quality</h3><span>review workload</span></div><div class="quality-list" id="qualityList"></div></article>
+      </section>
+
+      <section class="panel data-panel">
+        <div class="data-toolbar">
+          <div class="data-title"><h2>Voter list</h2><p id="tableSummary">0 matching rows</p></div>
+          <div class="toolbar-actions">
+            <button class="btn btn-ghost" id="resetTableButton" type="button">Reset table</button>
+            <button class="btn btn-ghost" id="columnButton" type="button">Columns</button>
+            <button class="btn btn-ghost" id="exportButton" type="button">Export filtered CSV</button>
+            <button class="btn btn-primary" id="printButton" type="button">Print / Save PDF</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table aria-label="Filtered voter data">
+            <thead id="tableHead"></thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+          <div class="empty-table" id="emptyTable" hidden>No voters match the current filters.</div>
+        </div>
+        <div class="pagination">
+          <div class="page-controls"><button class="btn btn-small btn-ghost" id="prevPage" type="button">← Previous</button><button class="btn btn-small btn-ghost" id="nextPage" type="button">Next →</button></div>
+          <span id="pageStatus">Page 1 of 1</span>
+          <label class="field" style="display:flex;grid-auto-flow:column;align-items:center;gap:7px"><span style="font-size:11px;color:var(--muted)">Rows</span><select id="pageSize" style="height:32px;width:76px"><option>25</option><option selected>50</option><option>100</option><option>250</option></select></label>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="columnDialog">
+    <div class="dialog-head"><div><h2>Columns &amp; print setup</h2><p>Screen and A4 output can use different column sets.</p></div><button class="dialog-close" data-close="columnDialog" type="button" aria-label="Close">×</button></div>
+    <div class="dialog-body">
+      <section class="modal-section">
+        <h3>Visible table columns</h3><p>Choose columns, then drag selected items or use the arrow buttons to change their sequence.</p>
+        <div class="preset-row" id="viewPresets"></div><div class="column-grid" id="viewColumnGrid"></div>
+      </section>
+      <section class="modal-section">
+        <h3>Print / PDF columns</h3><p id="printColumnHelp">Choose and reorder columns. Up to five prints in portrait; six or more switches to landscape. In the browser dialog, choose your printer or “Save as PDF”.</p>
+        <div class="preset-row" id="printPresets"></div><div class="column-grid" id="printColumnGrid"></div>
+      </section>
+      <section class="modal-section">
+        <h3>Rows to print</h3>
+        <div class="print-options">
+          <div class="option-card"><label><input type="radio" name="printScope" value="filtered" checked> All filtered rows</label><p id="filteredPrintCount">0 rows match the filters</p></div>
+          <div class="option-card"><label><input type="radio" name="printScope" value="selected"> Selected rows only</label><p id="selectedPrintCount">0 rows selected</p></div>
+        </div>
+      </section>
+    </div>
+    <div class="dialog-foot"><div class="dialog-actions"><button class="btn btn-danger" id="resetColumnSectionButton" type="button">Reset columns</button><span class="orientation-badge" id="orientationBadge">A4 landscape</span></div><div class="dialog-actions"><button class="btn btn-ghost" data-close="columnDialog" type="button">Done</button><button class="btn btn-primary" id="dialogPrintButton" type="button">Print / Save as PDF</button></div></div>
+  </dialog>
+
+  <dialog id="advancedDialog">
+    <div class="dialog-head"><div><h2>Advanced filters</h2><p>Rules are combined with AND and apply to every loaded CSV.</p></div><button class="dialog-close" data-close="advancedDialog" type="button" aria-label="Close">×</button></div>
+    <div class="dialog-body"><div id="ruleList"></div><button class="btn btn-ghost" id="addRuleButton" type="button">＋ Add rule</button></div>
+    <div class="dialog-foot"><span id="ruleHelp" style="color:var(--muted);font-size:11px">Text comparisons are case-insensitive.</span><div class="dialog-actions"><button class="btn btn-danger" id="clearRulesButton" type="button">Clear rules</button><button class="btn btn-primary" id="applyRulesButton" type="button">Apply filters</button></div></div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <section class="print-area" id="printArea" aria-hidden="true"></section>
+
+  <script>
+    "use strict";
+
+    // Application logic is intentionally embedded so this file works offline.
+    const $ = (selector) => document.querySelector(selector);
+    const $$ = (selector) => [...document.querySelectorAll(selector)];
+    const nf = new Intl.NumberFormat("en-IN");
+    const percent = (part, whole) => whole ? `${(part * 100 / whole).toFixed(1)}%` : "0%";
+
+    const LABELS = {
+      serial_number: "Serial no.", voter_id: "Voter ID", name_hindi: "Name (Hindi)",
+      first_name: "First name (Hindi)", middle_name: "Middle name (Hindi)", last_name: "Last name (Hindi)",
+      name_split_needs_review: "Name split review", name_english: "Name (English)",
+      english_first_name: "First name (English)", english_middle_name: "Middle name (English)",
+      english_last_name: "Last name (English)", english_name_needs_review: "English name review",
+      relative_name_hindi: "Relative name (Hindi)", relative_first_name: "Relative first (Hindi)",
+      relative_middle_name: "Relative middle (Hindi)", relative_last_name: "Relative last (Hindi)",
+      relative_name_split_needs_review: "Relative split review", relative_name_english: "Relative name (English)",
+      relative_english_first_name: "Relative first (English)", relative_english_middle_name: "Relative middle (English)",
+      relative_english_last_name: "Relative last (English)", relative_english_name_needs_review: "Relative English review",
+      relation_type: "Relation", house_number_or_address: "Full Address", age: "Age", gender: "Gender",
+      status: "Status", deletion_code: "Deletion code", deletion_reason: "Deletion reason",
+      municipality: "Municipality", ward_number: "Ward No.", part_number: "Part No.", roll_year: "Roll Year",
+      source_pdf: "Source PDF", source_pdf_page: "PDF page", name_ocr_confidence: "Name OCR confidence",
+      relative_name_ocr_confidence: "Relative OCR confidence", needs_review: "OCR review"
+    };
+
+    const FIELD_GROUPS = {
+      identity: ["serial_number", "voter_id", "name_hindi", "name_english", "relative_name_hindi", "relative_name_english"],
+      names: ["name_hindi", "first_name", "middle_name", "last_name", "name_english", "english_first_name", "english_middle_name", "english_last_name", "relative_name_hindi", "relative_name_english", "relation_type"],
+      demographics: ["age", "gender", "house_number_or_address", "relation_type", "municipality", "ward_number", "part_number"],
+      status: ["status", "deletion_code", "deletion_reason", "roll_year"],
+      quality: ["needs_review", "name_split_needs_review", "relative_name_split_needs_review", "english_name_needs_review", "relative_english_name_needs_review", "name_ocr_confidence", "relative_name_ocr_confidence"]
+    };
+
+    const DEFAULT_VIEW = ["ward_number", "part_number", "serial_number", "voter_id", "name_hindi", "relation_type", "relative_name_hindi", "gender", "age", "roll_year", "house_number_or_address"];
+    const DEFAULT_PRINT = [...DEFAULT_VIEW];
+    const PRINT_DETAILED = ["serial_number", "voter_id", "name_hindi", "relative_name_hindi", "relation_type", "house_number_or_address", "age", "gender", "status", "part_number"];
+    const REVIEW_FIELDS = ["needs_review", "name_split_needs_review", "relative_name_split_needs_review", "english_name_needs_review", "relative_english_name_needs_review"];
+    const HINDI_FIELDS = new Set(["name_hindi", "first_name", "middle_name", "last_name", "relative_name_hindi", "relative_first_name", "relative_middle_name", "relative_last_name", "gender", "relation_type"]);
+    const STORAGE_KEY = "voterDashboard.preferences.v2";
+    const DEFAULT_FILTERS = {
+      search: "", lastNameHindi: "", lastNameEnglish: "", status: "Active", gender: "",
+      part: "", relation: "", source: "", ageMin: "", ageMax: "", review: ""
+    };
+    const storedPreferences = loadPreferences();
+
+    const state = {
+      files: new Map(), rows: [], columns: [], filtered: [], selected: new Set(),
+      viewColumns: Array.isArray(storedPreferences?.viewColumns) ? storedPreferences.viewColumns : [],
+      printColumns: Array.isArray(storedPreferences?.printColumns) ? storedPreferences.printColumns : [],
+      advancedRules: Array.isArray(storedPreferences?.advancedRules) ? storedPreferences.advancedRules : [],
+      ruleDraft: [], sortColumn: storedPreferences?.sortColumn || "serial_number",
+      sortDirection: storedPreferences?.sortDirection === "desc" ? "desc" : "asc", page: 1,
+      pageSize: [25, 50, 100, 250].includes(Number(storedPreferences?.pageSize)) ? Number(storedPreferences.pageSize) : 50,
+      savedFilters: {...DEFAULT_FILTERS, ...(storedPreferences?.filters || {})},
+      savedPrintScope: storedPreferences?.printScope === "selected" ? "selected" : "filtered",
+      filtersInitialized: false, searchTimer: null, toastTimer: null, dragColumn: null
+    };
+
+    function labelFor(column) {
+      return LABELS[column] || column.replaceAll("_", " ").replace(/\b\w/g, letter => letter.toUpperCase());
+    }
+
+    function escapeHTML(value) {
+      return String(value ?? "").replace(/[&<>"]/g, character => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;"})[character]);
+    }
+
+    function parseCSV(text) {
+      const source = String(text ?? "").replace(/^\uFEFF/, "");
+      const matrix = [];
+      let row = [], field = "", quoted = false;
+      for (let index = 0; index < source.length; index += 1) {
+        const char = source[index];
+        if (quoted) {
+          if (char === '"' && source[index + 1] === '"') { field += '"'; index += 1; }
+          else if (char === '"') quoted = false;
+          else field += char;
+        } else if (char === '"' && field === "") quoted = true;
+        else if (char === ",") { row.push(field); field = ""; }
+        else if (char === "\n" || char === "\r") {
+          if (char === "\r" && source[index + 1] === "\n") index += 1;
+          row.push(field); field = "";
+          if (row.some(value => value !== "")) matrix.push(row);
+          row = [];
+        } else field += char;
+      }
+      if (field !== "" || row.length) {
+        row.push(field);
+        if (row.some(value => value !== "")) matrix.push(row);
+      }
+      if (quoted) throw new Error("The CSV contains an unclosed quoted field.");
+      if (!matrix.length) throw new Error("The file is empty.");
+      const headers = matrix.shift().map(value => value.trim());
+      if (headers.some(value => !value)) throw new Error("One or more column headers are blank.");
+      if (new Set(headers).size !== headers.length) throw new Error("Duplicate column headers were found.");
+      const rows = matrix.map((values, rowIndex) => {
+        if (values.length > headers.length) throw new Error(`Row ${rowIndex + 2} has more values than the header.`);
+        return Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ""]));
+      });
+      return { headers, rows };
+    }
+
+    function normal(value) { return String(value ?? "").trim().toLocaleLowerCase(); }
+    function isYes(value) { return normal(value) === "yes"; }
+    function finiteNumber(value) { const parsed = Number(value); return Number.isFinite(parsed) && String(value).trim() !== "" ? parsed : null; }
+    function valuesFor(field, rows = state.rows) { return rows.map(row => row[field]).filter(value => String(value ?? "").trim() !== ""); }
+
+    function loadPreferences() {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+        return parsed && parsed.version === 2 ? parsed : null;
+      } catch { return null; }
+    }
+
+    function currentFilters() {
+      return {
+        search: $("#globalSearch").value,
+        lastNameHindi: $("#lastNameHindiFilter").value,
+        lastNameEnglish: $("#lastNameEnglishFilter").value,
+        status: $("#statusFilter").value,
+        gender: $("#genderFilter").value,
+        part: $("#partFilter").value,
+        relation: $("#relationFilter").value,
+        source: $("#sourceFilter").value,
+        ageMin: $("#ageMin").value,
+        ageMax: $("#ageMax").value,
+        review: $("#reviewFilter").value
+      };
+    }
+
+    function savePreferences(filterOverride = null) {
+      state.savedFilters = filterOverride ? {...filterOverride} : currentFilters();
+      const printScope = $('input[name="printScope"]:checked')?.value || "filtered";
+      state.savedPrintScope = printScope;
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+          version: 2,
+          filters: state.savedFilters,
+          advancedRules: state.advancedRules,
+          viewColumns: state.viewColumns,
+          printColumns: state.printColumns,
+          sortColumn: state.sortColumn,
+          sortDirection: state.sortDirection,
+          pageSize: state.pageSize,
+          printScope
+        }));
+      } catch { /* Browsing can continue when storage is unavailable. */ }
+    }
+
+    function setSelectPreference(selector, value, fallback = "") {
+      const select = $(selector);
+      const preferred = [...select.options].some(option => option.value === value) ? value : fallback;
+      select.value = [...select.options].some(option => option.value === preferred) ? preferred : "";
+    }
+
+    function restoreFilterControls(filters = state.savedFilters, restorePrintScope = true) {
+      $("#globalSearch").value = filters.search || "";
+      $("#lastNameHindiFilter").value = filters.lastNameHindi || "";
+      $("#lastNameEnglishFilter").value = filters.lastNameEnglish || "";
+      setSelectPreference("#statusFilter", filters.status, "Active");
+      setSelectPreference("#genderFilter", filters.gender);
+      setSelectPreference("#partFilter", filters.part);
+      setSelectPreference("#relationFilter", filters.relation);
+      setSelectPreference("#sourceFilter", filters.source);
+      $("#ageMin").value = filters.ageMin || "";
+      $("#ageMax").value = filters.ageMax || "";
+      setSelectPreference("#reviewFilter", filters.review);
+      if (restorePrintScope) {
+        const scopeInput = $(`input[name="printScope"][value="${state.savedPrintScope}"]`);
+        if (scopeInput) scopeInput.checked = true;
+      }
+    }
+
+    function showToast(message) {
+      const toast = $("#toast");
+      toast.textContent = message;
+      toast.classList.add("show");
+      clearTimeout(state.toastTimer);
+      state.toastTimer = setTimeout(() => toast.classList.remove("show"), 3200);
+    }
+
+    async function loadFiles(fileList) {
+      const incoming = [...fileList].filter(file => file.name.toLowerCase().endsWith(".csv"));
+      if (!incoming.length) { showToast("Please choose CSV files."); return; }
+      let added = 0;
+      const failures = [];
+      for (const file of incoming) {
+        const key = `${file.name}:${file.size}:${file.lastModified}`;
+        if (state.files.has(key)) continue;
+        try {
+          const parsed = parseCSV(await file.text());
+          const fileRows = parsed.rows.map((row, index) => ({
+            ...row,
+            __fileKey: key,
+            __fileName: file.name,
+            __rowId: `${key}:${index}`,
+            __search: parsed.headers.map(header => row[header] ?? "").join(" \u241f ").toLocaleLowerCase()
+          }));
+          state.files.set(key, { key, name: file.name, size: file.size, headers: parsed.headers, rowCount: fileRows.length });
+          state.rows.push(...fileRows);
+          added += 1;
+        } catch (error) { failures.push(`${file.name}: ${error.message}`); }
+      }
+      $("#fileInput").value = "";
+      reconcileSchema();
+      if (added) {
+        $("#hero").hidden = true;
+        $("#workspace").hidden = false;
+        refreshFileRail();
+        populateQuickFilters();
+        if (!state.filtersInitialized) {
+          restoreFilterControls();
+          $("#pageSize").value = String(state.pageSize);
+          state.filtersInitialized = true;
+        }
+        applyFilters();
+        showToast(`${added} CSV file${added === 1 ? "" : "s"} loaded. ${nf.format(state.rows.length)} total rows.`);
+      }
+      if (failures.length) showToast(`Could not load ${failures.length} file(s). ${failures[0]}`);
+    }
+
+    function reconcileSchema() {
+      const columns = [];
+      state.files.forEach(file => file.headers.forEach(header => { if (!columns.includes(header)) columns.push(header); }));
+      const previousView = state.viewColumns.filter(column => columns.includes(column));
+      const previousPrint = state.printColumns.filter(column => columns.includes(column));
+      state.columns = columns;
+      if (!columns.includes(state.sortColumn)) state.sortColumn = columns[0] || "serial_number";
+      state.viewColumns = previousView.length ? previousView : DEFAULT_VIEW.filter(column => columns.includes(column));
+      state.printColumns = previousPrint.length ? previousPrint : DEFAULT_PRINT.filter(column => columns.includes(column));
+      if (!state.viewColumns.length && columns.length) state.viewColumns = columns.slice(0, 8);
+      if (!state.printColumns.length && columns.length) state.printColumns = columns.slice(0, 5);
+      state.advancedRules = state.advancedRules.filter(rule => columns.includes(rule.field));
+      state.selected = new Set([...state.selected].filter(id => state.rows.some(row => row.__rowId === id)));
+    }
+
+    function removeFile(key) {
+      const file = state.files.get(key);
+      if (!file) return;
+      state.files.delete(key);
+      state.rows = state.rows.filter(row => row.__fileKey !== key);
+      reconcileSchema();
+      if (!state.files.size) {
+        state.filtered = [];
+        state.selected.clear();
+        $("#workspace").hidden = true;
+        $("#hero").hidden = false;
+        showToast("All files removed.");
+        return;
+      }
+      refreshFileRail();
+      populateQuickFilters();
+      applyFilters();
+      showToast(`${file.name} removed.`);
+    }
+
+    function refreshFileRail() {
+      $("#fileRail").innerHTML = [...state.files.values()].map(file => `
+        <div class="file-chip" title="${escapeHTML(file.name)}">
+          <b>${escapeHTML(file.name)}</b><span>${nf.format(file.rowCount)} rows</span>
+          <button type="button" data-remove-file="${escapeHTML(file.key)}" aria-label="Remove ${escapeHTML(file.name)}">×</button>
+        </div>`).join("");
+    }
+
+    function populateSelect(selector, field, placeholder, fromFileName = false) {
+      const select = $(selector);
+      const current = select.value;
+      const counts = new Map();
+      state.rows.forEach(row => {
+        const value = fromFileName ? row.__fileName : row[field];
+        if (String(value ?? "").trim() !== "") counts.set(value, (counts.get(value) || 0) + 1);
+      });
+      const options = [...counts].sort(([a], [b]) => String(a).localeCompare(String(b), ["hi", "en"], {numeric: true}));
+      select.innerHTML = `<option value="">${escapeHTML(placeholder)}</option>` + options.map(([value, count]) => `<option value="${escapeHTML(value)}">${escapeHTML(value)} (${nf.format(count)})</option>`).join("");
+      if (options.some(([value]) => value === current)) select.value = current;
+    }
+
+    function populateQuickFilters() {
+      populateSelect("#statusFilter", "status", "All statuses");
+      populateSelect("#genderFilter", "gender", "All genders");
+      populateSelect("#partFilter", "part_number", "All parts");
+      populateSelect("#relationFilter", "relation_type", "All relations");
+      populateSelect("#sourceFilter", "", "All files", true);
+      const datalist = (selector, field) => {
+        const unique = [...new Set(valuesFor(field))].sort((a, b) => a.localeCompare(b, ["hi", "en"], {numeric: true, sensitivity: "base"}));
+        $(selector).innerHTML = unique.map(value => `<option value="${escapeHTML(value)}"></option>`).join("");
+      };
+      datalist("#lastNameHindiOptions", "last_name");
+      datalist("#lastNameEnglishOptions", "english_last_name");
+    }
+
+    function anyReview(row) { return REVIEW_FIELDS.some(field => isYes(row[field])); }
+
+    function matchesAdvancedRule(row, rule) {
+      const raw = String(row[rule.field] ?? "").trim();
+      const value = String(rule.value ?? "").trim();
+      const left = normal(raw), right = normal(value);
+      if (rule.operator === "empty") return raw === "";
+      if (rule.operator === "not_empty") return raw !== "";
+      if (rule.operator === "contains") return left.includes(right);
+      if (rule.operator === "not_contains") return !left.includes(right);
+      if (rule.operator === "equals") return left === right;
+      if (rule.operator === "not_equals") return left !== right;
+      if (rule.operator === "starts") return left.startsWith(right);
+      const numericLeft = finiteNumber(raw);
+      if (numericLeft === null) return false;
+      if (rule.operator === "greater") return numericLeft > Number(value);
+      if (rule.operator === "less") return numericLeft < Number(value);
+      if (rule.operator === "between") {
+        const [minimum, maximum] = value.split(/[,–-]/).map(part => Number(part.trim()));
+        return Number.isFinite(minimum) && Number.isFinite(maximum) && numericLeft >= minimum && numericLeft <= maximum;
+      }
+      return true;
+    }
+
+    function filterSummaryText() {
+      const chips = getActiveFilterLabels();
+      return chips.length ? chips.join(" · ") : "All loaded records";
+    }
+
+    function getActiveFilterLabels() {
+      const labels = [];
+      const search = $("#globalSearch").value.trim();
+      if (search) labels.push(`Search: “${search}”`);
+      if ($("#lastNameHindiFilter").value) labels.push(`Hindi last name: ${$("#lastNameHindiFilter").value}`);
+      if ($("#lastNameEnglishFilter").value) labels.push(`English last name: ${$("#lastNameEnglishFilter").value}`);
+      [["#statusFilter", "Status"], ["#genderFilter", "Gender"], ["#partFilter", "Part"], ["#relationFilter", "Relation"], ["#sourceFilter", "File"]].forEach(([selector, label]) => {
+        if ($(selector).value) labels.push(`${label}: ${$(selector).value}`);
+      });
+      if ($("#ageMin").value) labels.push(`Age ≥ ${$("#ageMin").value}`);
+      if ($("#ageMax").value) labels.push(`Age ≤ ${$("#ageMax").value}`);
+      if ($("#reviewFilter").value) labels.push(`Quality: ${$("#reviewFilter").selectedOptions[0].textContent}`);
+      state.advancedRules.forEach(rule => labels.push(`${labelFor(rule.field)} ${rule.operator.replaceAll("_", " ")} ${rule.value || ""}`.trim()));
+      return labels;
+    }
+
+    function applyFilters() {
+      const query = normal($("#globalSearch").value);
+      const lastNameHindi = normal($("#lastNameHindiFilter").value);
+      const lastNameEnglish = normal($("#lastNameEnglishFilter").value);
+      const status = $("#statusFilter").value;
+      const gender = $("#genderFilter").value;
+      const part = $("#partFilter").value;
+      const relation = $("#relationFilter").value;
+      const source = $("#sourceFilter").value;
+      const minimumAge = finiteNumber($("#ageMin").value);
+      const maximumAge = finiteNumber($("#ageMax").value);
+      const review = $("#reviewFilter").value;
+
+      state.filtered = state.rows.filter(row => {
+        if (query && !row.__search.includes(query)) return false;
+        if (lastNameHindi && !normal(row.last_name).includes(lastNameHindi)) return false;
+        if (lastNameEnglish && !normal(row.english_last_name).includes(lastNameEnglish)) return false;
+        if (status && row.status !== status) return false;
+        if (gender && row.gender !== gender) return false;
+        if (part && row.part_number !== part) return false;
+        if (relation && row.relation_type !== relation) return false;
+        if (source && row.__fileName !== source) return false;
+        const age = finiteNumber(row.age);
+        if (minimumAge !== null && (age === null || age < minimumAge)) return false;
+        if (maximumAge !== null && (age === null || age > maximumAge)) return false;
+        if (review === "clean" && anyReview(row)) return false;
+        if (review === "any" && !anyReview(row)) return false;
+        if (review === "ocr" && !isYes(row.needs_review)) return false;
+        if (review === "split" && ![row.name_split_needs_review, row.relative_name_split_needs_review].some(isYes)) return false;
+        if (review === "english" && ![row.english_name_needs_review, row.relative_english_name_needs_review].some(isYes)) return false;
+        return state.advancedRules.every(rule => matchesAdvancedRule(row, rule));
+      });
+      sortFilteredRows();
+      state.page = 1;
+      renderActiveFilters();
+      renderAnalytics();
+      renderTable();
+      updatePrintSetup();
+      savePreferences();
+    }
+
+    function sortFilteredRows() {
+      const column = state.sortColumn;
+      const direction = state.sortDirection === "asc" ? 1 : -1;
+      state.filtered.sort((a, b) => {
+        const leftNumber = finiteNumber(a[column]), rightNumber = finiteNumber(b[column]);
+        if (leftNumber !== null && rightNumber !== null) return (leftNumber - rightNumber) * direction;
+        return String(a[column] ?? "").localeCompare(String(b[column] ?? ""), ["hi", "en"], {numeric: true, sensitivity: "base"}) * direction;
+      });
+    }
+
+    function renderActiveFilters() {
+      const labels = getActiveFilterLabels();
+      $("#activeChips").innerHTML = labels.length ? labels.map(value => `<span class="active-chip">${escapeHTML(value)}</span>`).join("") : '<span class="active-chip">No filters applied</span>';
+      $("#advancedCount").textContent = state.advancedRules.length ? `(${state.advancedRules.length})` : "";
+    }
+
+    function countsBy(rows, field) {
+      const counts = new Map();
+      rows.forEach(row => {
+        const value = String(row[field] ?? "").trim() || "Missing";
+        counts.set(value, (counts.get(value) || 0) + 1);
+      });
+      return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+    }
+
+    function duplicateStats(rows) {
+      const counts = new Map();
+      let missing = 0;
+      rows.forEach(row => {
+        const id = String(row.voter_id ?? "").trim();
+        if (!id) missing += 1;
+        else counts.set(id, (counts.get(id) || 0) + 1);
+      });
+      const duplicateIDs = [...counts.values()].filter(count => count > 1).length;
+      const duplicateRows = [...counts.values()].filter(count => count > 1).reduce((sum, count) => sum + count, 0);
+      return { unique: counts.size, missing, duplicateIDs, duplicateRows };
+    }
+
+    function renderAnalytics() {
+      const rows = state.filtered;
+      const total = rows.length;
+      const active = rows.filter(row => normal(row.status) === "active").length;
+      const deleted = rows.filter(row => normal(row.status) === "deleted").length;
+      const ages = rows.map(row => finiteNumber(row.age)).filter(value => value !== null);
+      const averageAge = ages.length ? ages.reduce((sum, value) => sum + value, 0) / ages.length : null;
+      const reviewRows = rows.filter(anyReview).length;
+      const ids = duplicateStats(rows);
+
+      $("#kpiTotal").textContent = nf.format(total);
+      $("#kpiLoaded").textContent = `of ${nf.format(state.rows.length)} loaded`;
+      $("#kpiActive").textContent = nf.format(active);
+      $("#kpiActivePct").textContent = `${percent(active, total)} of matching`;
+      $("#kpiDeleted").textContent = nf.format(deleted);
+      $("#kpiDeletedPct").textContent = `${percent(deleted, total)} of matching`;
+      $("#kpiAge").textContent = averageAge === null ? "—" : averageAge.toFixed(1);
+      $("#kpiAgeRange").textContent = ages.length ? `range ${Math.min(...ages)}–${Math.max(...ages)} years` : "No age values";
+      $("#kpiUnique").textContent = nf.format(ids.unique);
+      $("#kpiDuplicate").textContent = `${nf.format(ids.duplicateIDs)} duplicate IDs · ${nf.format(ids.missing)} missing`;
+      $("#kpiReview").textContent = nf.format(reviewRows);
+      $("#kpiReviewPct").textContent = `${percent(reviewRows, total)} of matching`;
+      $("#analyticsStamp").textContent = `Updated ${new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}`;
+
+      const genders = countsBy(rows, "gender");
+      renderDonut("genderDonut", "genderLegend", genders, ["#3e6685", "#b15e7d", "#d88632", "#7a776f"]);
+      $("#genderCenter").textContent = nf.format(total);
+      $("#genderSubtitle").textContent = `${genders.length} categor${genders.length === 1 ? "y" : "ies"}`;
+      const statuses = countsBy(rows, "status");
+      renderDonut("statusDonut", "statusLegend", statuses, ["#3d7a56", "#a64f4f", "#d88632", "#7a776f"]);
+      $("#statusCenter").textContent = nf.format(total);
+
+      const ageBands = [["18–24",18,24], ["25–34",25,34], ["35–44",35,44], ["45–59",45,59], ["60–79",60,79], ["80+",80,Infinity]];
+      const ageData = ageBands.map(([label, minimum, maximum]) => [label, ages.filter(age => age >= minimum && age <= maximum).length]);
+      renderBars("ageBars", ageData, "#176b68");
+      $("#ageSubtitle").textContent = `${nf.format(ages.length)} valid ages`;
+      renderBars("partBars", countsBy(rows, "part_number").slice(0, 12), "#d88632");
+      const surnameCounts = new Map();
+      let missingSurnames = 0;
+      rows.forEach(row => {
+        const english = String(row.english_last_name ?? "").trim();
+        const hindi = String(row.last_name ?? "").trim();
+        const key = normal(hindi || english);
+        if (!key) { missingSurnames += 1; return; }
+        const label = english && hindi ? `${english} · ${hindi}` : english || hindi;
+        const current = surnameCounts.get(key) || {label, count: 0};
+        current.count += 1;
+        surnameCounts.set(key, current);
+      });
+      const surnameData = [...surnameCounts.values()].sort((a, b) => b.count - a.count).slice(0, 12).map(item => [item.label, item.count]);
+      renderBars("surnameBars", surnameData, "#8d5b75");
+      $("#surnameSubtitle").textContent = `${nf.format(surnameCounts.size)} surnames · ${nf.format(missingSurnames)} missing`;
+      renderBars("relationBars", countsBy(rows, "relation_type").slice(0, 7), "#3e6685");
+      renderQuality(rows, ids);
+    }
+
+    function renderDonut(donutId, legendId, data, colors) {
+      const total = data.reduce((sum, [, count]) => sum + count, 0);
+      let cumulative = 0;
+      const segments = data.map(([, count], index) => {
+        const start = total ? cumulative * 100 / total : 0;
+        cumulative += count;
+        const end = total ? cumulative * 100 / total : 0;
+        return `${colors[index % colors.length]} ${start}% ${end}%`;
+      });
+      $(`#${donutId}`).style.background = total ? `conic-gradient(${segments.join(",")})` : "#e7e3da";
+      $(`#${legendId}`).innerHTML = data.length ? data.slice(0, 6).map(([label, count], index) => `<div class="legend-row"><i style="background:${colors[index % colors.length]}"></i><span title="${escapeHTML(label)}">${escapeHTML(label)}</span><b>${percent(count, total)}</b></div>`).join("") : '<span style="color:var(--muted);font-size:12px">No data</span>';
+    }
+
+    function renderBars(id, data, color) {
+      const maximum = Math.max(0, ...data.map(([, count]) => count));
+      $(`#${id}`).innerHTML = data.length ? data.map(([label, count]) => `<div class="bar-row"><span class="bar-label" title="${escapeHTML(label)}">${escapeHTML(label)}</span><span class="bar-track"><i class="bar-fill" style="width:${maximum ? count * 100 / maximum : 0}%;background:${color}"></i></span><b class="bar-value">${nf.format(count)}</b></div>`).join("") : '<span style="color:var(--muted);font-size:12px">No data for this view.</span>';
+    }
+
+    function renderQuality(rows, ids) {
+      const metrics = [
+        ["OCR review", rows.filter(row => isYes(row.needs_review)).length],
+        ["Name split review", rows.filter(row => isYes(row.name_split_needs_review) || isYes(row.relative_name_split_needs_review)).length],
+        ["English spelling review", rows.filter(row => isYes(row.english_name_needs_review) || isYes(row.relative_english_name_needs_review)).length],
+        ["Missing voter ID", ids.missing],
+        ["Rows sharing an ID", ids.duplicateRows]
+      ];
+      $("#qualityList").innerHTML = metrics.map(([label, count]) => `<div class="quality-item"><span>${escapeHTML(label)}</span><b>${nf.format(count)}</b><div class="quality-meter"><i style="width:${rows.length ? count * 100 / rows.length : 0}%"></i></div></div>`).join("");
+    }
+
+    function cellHTML(column, value) {
+      const safe = escapeHTML(value || "—");
+      if (column === "status") return `<span class="pill ${normal(value) === "active" ? "pill-active" : "pill-deleted"}">${safe}</span>`;
+      if (column === "gender") return `<span class="pill ${value === "पुरुष" ? "pill-men" : value === "महिला" ? "pill-women" : ""}">${safe}</span>`;
+      if (column.endsWith("needs_review")) return `<span class="pill ${isYes(value) ? "pill-yes" : "pill-no"}">${safe}</span>`;
+      return safe;
+    }
+
+    function renderTable() {
+      const totalPages = Math.max(1, Math.ceil(state.filtered.length / state.pageSize));
+      if (state.page > totalPages) state.page = totalPages;
+      const start = (state.page - 1) * state.pageSize;
+      const pageRows = state.filtered.slice(start, start + state.pageSize);
+      const selectedOnPage = pageRows.length && pageRows.every(row => state.selected.has(row.__rowId));
+      $("#tableHead").innerHTML = `<tr><th><input type="checkbox" id="selectPage" aria-label="Select all rows on this page" ${selectedOnPage ? "checked" : ""}></th>${state.viewColumns.map(column => `<th><button type="button" data-sort="${escapeHTML(column)}">${escapeHTML(labelFor(column))}${state.sortColumn === column ? (state.sortDirection === "asc" ? " ↑" : " ↓") : ""}</button></th>`).join("")}</tr>`;
+      $("#tableBody").innerHTML = pageRows.map(row => `<tr><td><input type="checkbox" data-row-id="${escapeHTML(row.__rowId)}" aria-label="Select voter row" ${state.selected.has(row.__rowId) ? "checked" : ""}></td>${state.viewColumns.map(column => `<td class="${HINDI_FIELDS.has(column) ? "hindi" : ""}" title="${escapeHTML(row[column] || "")}">${cellHTML(column, row[column])}</td>`).join("")}</tr>`).join("");
+      $("#emptyTable").hidden = state.filtered.length !== 0;
+      $("#tableSummary").textContent = `${nf.format(state.filtered.length)} matching · ${nf.format(state.selected.size)} selected · sorted by ${labelFor(state.sortColumn)}`;
+      $("#pageStatus").textContent = state.filtered.length ? `Page ${state.page} of ${totalPages} · rows ${nf.format(start + 1)}–${nf.format(Math.min(start + state.pageSize, state.filtered.length))}` : "Page 1 of 1";
+      $("#prevPage").disabled = state.page <= 1;
+      $("#nextPage").disabled = state.page >= totalPages;
+    }
+
+    function resetFilters() {
+      state.savedFilters = {...DEFAULT_FILTERS};
+      restoreFilterControls(DEFAULT_FILTERS, false);
+      state.advancedRules = [];
+      applyFilters();
+      showToast("Filters reset. Active voters are shown by default.");
+    }
+
+    function resetTable() {
+      state.viewColumns = DEFAULT_VIEW.filter(column => state.columns.includes(column));
+      state.sortColumn = "serial_number";
+      state.sortDirection = "asc";
+      state.pageSize = 50;
+      state.page = 1;
+      $("#pageSize").value = "50";
+      sortFilteredRows();
+      renderTable();
+      savePreferences();
+      showToast("Table columns, order, sorting, and page size reset.");
+    }
+
+    function resetColumns() {
+      state.viewColumns = DEFAULT_VIEW.filter(column => state.columns.includes(column));
+      state.printColumns = DEFAULT_PRINT.filter(column => state.columns.includes(column));
+      renderColumnDialog();
+      renderTable();
+      savePreferences();
+      showToast("Screen and print columns reset to the requested default order.");
+    }
+
+    function resetAllSettings() {
+      try { localStorage.removeItem(STORAGE_KEY); } catch { /* Ignore unavailable storage. */ }
+      state.savedFilters = {...DEFAULT_FILTERS};
+      state.advancedRules = [];
+      state.viewColumns = DEFAULT_VIEW.filter(column => state.columns.includes(column));
+      state.printColumns = DEFAULT_PRINT.filter(column => state.columns.includes(column));
+      state.sortColumn = "serial_number";
+      state.sortDirection = "asc";
+      state.pageSize = 50;
+      state.page = 1;
+      state.savedPrintScope = "filtered";
+      $('input[name="printScope"][value="filtered"]').checked = true;
+      $("#pageSize").value = "50";
+      if (state.rows.length) {
+        restoreFilterControls(DEFAULT_FILTERS);
+        state.filtersInitialized = true;
+        applyFilters();
+        renderColumnDialog();
+      } else {
+        state.filtersInitialized = false;
+      }
+      savePreferences(DEFAULT_FILTERS);
+      showToast("All dashboard settings reset to defaults.");
+    }
+
+    function presetColumns(kind, preset) {
+      let columns;
+      if (preset === "default") columns = kind === "view" ? DEFAULT_VIEW : DEFAULT_PRINT;
+      else if (preset === "detailed") columns = PRINT_DETAILED;
+      else if (preset === "all") columns = state.columns;
+      else columns = FIELD_GROUPS[preset] || [];
+      columns = columns.filter(column => state.columns.includes(column));
+      if (kind === "view") state.viewColumns = columns.length ? columns : state.columns.slice(0, 1);
+      else state.printColumns = columns.length ? columns : state.columns.slice(0, 1);
+      renderColumnDialog();
+      if (kind === "view") renderTable();
+      savePreferences();
+    }
+
+    function moveColumn(kind, index, direction) {
+      const target = kind === "view" ? state.viewColumns : state.printColumns;
+      const destination = index + direction;
+      if (index < 0 || destination < 0 || destination >= target.length) return;
+      [target[index], target[destination]] = [target[destination], target[index]];
+      renderColumnDialog();
+      if (kind === "view") renderTable();
+      savePreferences();
+    }
+
+    function reorderColumn(kind, sourceColumn, targetColumn) {
+      const target = kind === "view" ? state.viewColumns : state.printColumns;
+      const from = target.indexOf(sourceColumn), to = target.indexOf(targetColumn);
+      if (from < 0 || to < 0 || from === to) return;
+      target.splice(to, 0, target.splice(from, 1)[0]);
+      renderColumnDialog();
+      if (kind === "view") renderTable();
+      savePreferences();
+    }
+
+    function renderColumnDialog() {
+      const presetButton = (kind, key, text) => `<button class="btn btn-small btn-ghost" type="button" data-column-kind="${kind}" data-preset="${key}">${text}</button>`;
+      $("#viewPresets").innerHTML = presetButton("view", "default", "Reset visible default") + presetButton("view", "identity", "Identity") + presetButton("view", "names", "Names") + presetButton("view", "demographics", "Demographics") + presetButton("view", "quality", "Quality") + presetButton("view", "all", "All");
+      $("#printPresets").innerHTML = presetButton("print", "default", "Reset print default") + presetButton("print", "detailed", "Detailed landscape") + presetButton("print", "identity", "Identity") + presetButton("print", "quality", "Quality") + presetButton("print", "all", "All");
+      const grid = (kind, selected) => {
+        const ordered = [...selected, ...state.columns.filter(column => !selected.includes(column))];
+        return ordered.map(column => {
+          const index = selected.indexOf(column), active = index >= 0;
+          return `<div class="check-item ${active ? "is-selected" : ""}" title="${escapeHTML(column)}" draggable="${active}" data-drag-column="${escapeHTML(column)}" data-drag-kind="${kind}">
+            <input type="checkbox" data-column-select="${kind}" value="${escapeHTML(column)}" ${active ? "checked" : ""} aria-label="Show ${escapeHTML(labelFor(column))}">
+            <span class="sequence-badge">${active ? index + 1 : "—"}</span><span>${escapeHTML(labelFor(column))}</span>
+            <button class="move-button" type="button" data-move-column="${kind}" data-column-index="${index}" data-direction="-1" aria-label="Move ${escapeHTML(labelFor(column))} earlier" ${!active || index === 0 ? "disabled" : ""}>↑</button>
+            <button class="move-button" type="button" data-move-column="${kind}" data-column-index="${index}" data-direction="1" aria-label="Move ${escapeHTML(labelFor(column))} later" ${!active || index === selected.length - 1 ? "disabled" : ""}>↓</button>
+          </div>`;
+        }).join("");
+      };
+      $("#viewColumnGrid").innerHTML = grid("view", state.viewColumns);
+      $("#printColumnGrid").innerHTML = grid("print", state.printColumns);
+      updatePrintSetup();
+    }
+
+    function updatePrintSetup() {
+      const orientation = state.printColumns.length >= 6 ? "landscape" : "portrait";
+      const matchingSelected = state.filtered.filter(row => state.selected.has(row.__rowId)).length;
+      $("#orientationBadge").textContent = `A4 ${orientation} · ${state.printColumns.length} column${state.printColumns.length === 1 ? "" : "s"}`;
+      $("#filteredPrintCount").textContent = `${nf.format(state.filtered.length)} rows match the filters`;
+      $("#selectedPrintCount").textContent = state.selected.size === matchingSelected
+        ? `${nf.format(matchingSelected)} rows selected`
+        : `${nf.format(matchingSelected)} matching · ${nf.format(state.selected.size)} selected overall`;
+      const selectedRadio = $('input[name="printScope"][value="selected"]');
+      selectedRadio.disabled = matchingSelected === 0;
+      if (!matchingSelected && selectedRadio.checked) $('input[name="printScope"][value="filtered"]').checked = true;
+    }
+
+    function renderAdvancedRules() {
+      const operators = [
+        ["contains", "contains"], ["not_contains", "does not contain"], ["equals", "equals"], ["not_equals", "does not equal"],
+        ["starts", "starts with"], ["greater", "greater than"], ["less", "less than"], ["between", "between (min,max)"],
+        ["empty", "is empty"], ["not_empty", "is not empty"]
+      ];
+      if (!state.ruleDraft.length) {
+        $("#ruleList").innerHTML = '<div class="advanced-empty">No advanced rules yet. Add one to filter any CSV field.</div>';
+        return;
+      }
+      $("#ruleList").innerHTML = state.ruleDraft.map((rule, index) => `<div class="rule-row" data-rule-index="${index}">
+        <select class="rule-field" aria-label="Filter field">${state.columns.map(column => `<option value="${escapeHTML(column)}" ${column === rule.field ? "selected" : ""}>${escapeHTML(labelFor(column))}</option>`).join("")}</select>
+        <select class="rule-operator" aria-label="Filter operator">${operators.map(([value, label]) => `<option value="${value}" ${value === rule.operator ? "selected" : ""}>${label}</option>`).join("")}</select>
+        <input class="rule-value" type="text" value="${escapeHTML(rule.value)}" placeholder="Value" aria-label="Filter value" ${["empty", "not_empty"].includes(rule.operator) ? "disabled" : ""}>
+        <button type="button" data-remove-rule="${index}" aria-label="Remove filter rule">×</button>
+      </div>`).join("");
+    }
+
+    function csvEscape(value) {
+      const text = String(value ?? "");
+      return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+    }
+
+    function exportFilteredCSV() {
+      if (!state.filtered.length) { showToast("There are no filtered rows to export."); return; }
+      const text = "\uFEFF" + [state.columns.join(","), ...state.filtered.map(row => state.columns.map(column => csvEscape(row[column])).join(","))].join("\n");
+      const blob = new Blob([text], {type: "text/csv;charset=utf-8"});
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `filtered_voters_${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+      showToast(`${nf.format(state.filtered.length)} filtered rows exported.`);
+    }
+
+    function prepareAndPrint() {
+      const scope = $('input[name="printScope"]:checked').value;
+      const rows = scope === "selected" ? state.filtered.filter(row => state.selected.has(row.__rowId)) : state.filtered;
+      if (!rows.length) { showToast(scope === "selected" ? "Select at least one matching row first." : "No rows match the current filters."); return; }
+      if (!state.printColumns.length) { showToast("Choose at least one print column."); return; }
+      const orientation = state.printColumns.length >= 6 ? "landscape" : "portrait";
+      const fontSize = state.printColumns.length >= 16 ? "5pt" : state.printColumns.length >= 10 ? "6pt" : "7.5pt";
+      $("#printPageStyle").textContent = `@page { size: A4 ${orientation}; margin: 10mm; }`;
+      $("#printArea").style.setProperty("--print-font-size", fontSize);
+      const now = new Date();
+      $("#printArea").innerHTML = `
+        <header class="print-title"><div><h1>Voter List Report</h1><p>मतदाता दृष्टि · Filtered voter data</p></div><div class="print-meta"><b>${nf.format(rows.length)} rows</b><br>${escapeHTML(now.toLocaleString())}<br>A4 ${orientation}</div></header>
+        <div class="print-summary"><b>Files:</b> ${state.files.size} &nbsp;·&nbsp; <b>Filters:</b> ${escapeHTML(filterSummaryText())} &nbsp;·&nbsp; <b>Columns:</b> ${state.printColumns.length}</div>
+        <table class="print-table"><thead><tr>${state.printColumns.map(column => `<th>${escapeHTML(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${rows.map(row => `<tr>${state.printColumns.map(column => `<td class="${HINDI_FIELDS.has(column) ? "hindi" : ""}">${escapeHTML(row[column] || "")}</td>`).join("")}</tr>`).join("")}</tbody></table>
+        <div class="print-footer">Generated locally from the selected CSV files. English names are transliterations and review flags should be checked before official use.</div>`;
+      $("#printArea").setAttribute("aria-hidden", "false");
+      $("#columnDialog").close();
+      setTimeout(() => window.print(), 30);
+    }
+
+    function openColumnDialog() { renderColumnDialog(); $("#columnDialog").showModal(); }
+    function openAdvancedDialog() { state.ruleDraft = state.advancedRules.map(rule => ({...rule})); renderAdvancedRules(); $("#advancedDialog").showModal(); }
+
+    $("#chooseFilesButton").addEventListener("click", () => $("#fileInput").click());
+    $("#headerLoadButton").addEventListener("click", () => $("#fileInput").click());
+    $("#dropZone").addEventListener("keydown", event => { if (["Enter", " "].includes(event.key)) { event.preventDefault(); $("#fileInput").click(); } });
+    $("#fileInput").addEventListener("change", event => loadFiles(event.target.files));
+    ["dragenter", "dragover"].forEach(type => $("#dropZone").addEventListener(type, event => { event.preventDefault(); $("#dropZone").classList.add("dragging"); }));
+    ["dragleave", "drop"].forEach(type => $("#dropZone").addEventListener(type, event => { event.preventDefault(); $("#dropZone").classList.remove("dragging"); }));
+    $("#dropZone").addEventListener("drop", event => loadFiles(event.dataTransfer.files));
+    $("#fileRail").addEventListener("click", event => { const button = event.target.closest("[data-remove-file]"); if (button) removeFile(button.dataset.removeFile); });
+
+    ["#globalSearch", "#lastNameHindiFilter", "#lastNameEnglishFilter"].forEach(selector => $(selector).addEventListener("input", () => { clearTimeout(state.searchTimer); state.searchTimer = setTimeout(applyFilters, 140); }));
+    ["#statusFilter", "#genderFilter", "#partFilter", "#relationFilter", "#sourceFilter", "#reviewFilter"].forEach(selector => $(selector).addEventListener("change", applyFilters));
+    ["#ageMin", "#ageMax"].forEach(selector => $(selector).addEventListener("input", () => { clearTimeout(state.searchTimer); state.searchTimer = setTimeout(applyFilters, 180); }));
+    $("#resetFiltersButton").addEventListener("click", resetFilters);
+    $("#resetAnalyticsButton").addEventListener("click", resetFilters);
+    $("#resetTableButton").addEventListener("click", resetTable);
+    $("#resetColumnSectionButton").addEventListener("click", resetColumns);
+    $("#resetAllButton").addEventListener("click", resetAllSettings);
+    $("#advancedButton").addEventListener("click", openAdvancedDialog);
+    $("#columnButton").addEventListener("click", openColumnDialog);
+    $("#printButton").addEventListener("click", openColumnDialog);
+    $("#exportButton").addEventListener("click", exportFilteredCSV);
+    $("#dialogPrintButton").addEventListener("click", prepareAndPrint);
+
+    document.addEventListener("click", event => {
+      const closeButton = event.target.closest("[data-close]");
+      if (closeButton) $(`#${closeButton.dataset.close}`).close();
+      const preset = event.target.closest("[data-preset]");
+      if (preset) presetColumns(preset.dataset.columnKind, preset.dataset.preset);
+      const sort = event.target.closest("[data-sort]");
+      if (sort) {
+        const column = sort.dataset.sort;
+        if (state.sortColumn === column) state.sortDirection = state.sortDirection === "asc" ? "desc" : "asc";
+        else { state.sortColumn = column; state.sortDirection = "asc"; }
+        sortFilteredRows(); renderTable(); savePreferences();
+      }
+      const move = event.target.closest("[data-move-column]");
+      if (move) moveColumn(move.dataset.moveColumn, Number(move.dataset.columnIndex), Number(move.dataset.direction));
+      const removeRule = event.target.closest("[data-remove-rule]");
+      if (removeRule) { state.ruleDraft.splice(Number(removeRule.dataset.removeRule), 1); renderAdvancedRules(); }
+    });
+
+    document.addEventListener("change", event => {
+      if (event.target.matches("[data-column-select]")) {
+        const kind = event.target.dataset.columnSelect;
+        const target = kind === "view" ? state.viewColumns : state.printColumns;
+        if (event.target.checked && !target.includes(event.target.value)) target.push(event.target.value);
+        if (!event.target.checked) {
+          if (target.length === 1) { event.target.checked = true; showToast("Keep at least one column selected."); return; }
+          target.splice(target.indexOf(event.target.value), 1);
+        }
+        if (kind === "view") renderTable();
+        updatePrintSetup();
+        savePreferences();
+      }
+      if (event.target.matches("[data-row-id]")) {
+        if (event.target.checked) state.selected.add(event.target.dataset.rowId); else state.selected.delete(event.target.dataset.rowId);
+        renderTable(); updatePrintSetup();
+      }
+      if (event.target.id === "selectPage") {
+        const start = (state.page - 1) * state.pageSize;
+        state.filtered.slice(start, start + state.pageSize).forEach(row => event.target.checked ? state.selected.add(row.__rowId) : state.selected.delete(row.__rowId));
+        renderTable(); updatePrintSetup();
+      }
+      const ruleRow = event.target.closest("[data-rule-index]");
+      if (ruleRow) {
+        const index = Number(ruleRow.dataset.ruleIndex);
+        state.ruleDraft[index] = {
+          field: ruleRow.querySelector(".rule-field").value,
+          operator: ruleRow.querySelector(".rule-operator").value,
+          value: ruleRow.querySelector(".rule-value").value
+        };
+        if (event.target.classList.contains("rule-operator")) renderAdvancedRules();
+      }
+      if (event.target.matches('input[name="printScope"]')) savePreferences();
+    });
+
+    document.addEventListener("dragstart", event => {
+      const item = event.target.closest("[data-drag-column]");
+      if (!item || item.getAttribute("draggable") !== "true") return;
+      state.dragColumn = {column: item.dataset.dragColumn, kind: item.dataset.dragKind};
+      item.classList.add("dragging");
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", item.dataset.dragColumn);
+    });
+    document.addEventListener("dragover", event => {
+      const item = event.target.closest("[data-drag-column]");
+      if (item && state.dragColumn && item.dataset.dragKind === state.dragColumn.kind && item.getAttribute("draggable") === "true") {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+      }
+    });
+    document.addEventListener("drop", event => {
+      const item = event.target.closest("[data-drag-column]");
+      if (!item || !state.dragColumn || item.dataset.dragKind !== state.dragColumn.kind) return;
+      event.preventDefault();
+      reorderColumn(state.dragColumn.kind, state.dragColumn.column, item.dataset.dragColumn);
+      state.dragColumn = null;
+    });
+    document.addEventListener("dragend", () => {
+      $$(".check-item.dragging").forEach(item => item.classList.remove("dragging"));
+      state.dragColumn = null;
+    });
+
+    $("#ruleList").addEventListener("input", event => {
+      const ruleRow = event.target.closest("[data-rule-index]");
+      if (!ruleRow) return;
+      const index = Number(ruleRow.dataset.ruleIndex);
+      state.ruleDraft[index].value = ruleRow.querySelector(".rule-value").value;
+    });
+    $("#addRuleButton").addEventListener("click", () => { state.ruleDraft.push({field: state.columns[0] || "", operator: "contains", value: ""}); renderAdvancedRules(); });
+    $("#clearRulesButton").addEventListener("click", () => { state.ruleDraft = []; state.advancedRules = []; renderAdvancedRules(); applyFilters(); });
+    $("#applyRulesButton").addEventListener("click", () => {
+      state.advancedRules = state.ruleDraft.filter(rule => ["empty", "not_empty"].includes(rule.operator) || String(rule.value).trim() !== "");
+      $("#advancedDialog").close(); applyFilters();
+    });
+
+    $("#prevPage").addEventListener("click", () => { if (state.page > 1) { state.page -= 1; renderTable(); } });
+    $("#nextPage").addEventListener("click", () => { if (state.page * state.pageSize < state.filtered.length) { state.page += 1; renderTable(); } });
+    $("#pageSize").addEventListener("change", event => { state.pageSize = Number(event.target.value); state.page = 1; renderTable(); savePreferences(); });
+    $("#pageSize").value = String(state.pageSize);
+    window.addEventListener("afterprint", () => { $("#printArea").setAttribute("aria-hidden", "true"); });
+
+    window.__voterDashboardTest = { parseCSV, csvEscape, labelFor, normal, matchesAdvancedRule };
+  </script>
+</body>
+</html>
