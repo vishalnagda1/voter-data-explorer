@@ -11,6 +11,8 @@ The script deliberately uses two sources:
 
 It writes a CSV only after serials, IDs, demographics, and the cover-page totals
 reconcile. OCR-sensitive rows remain visible through confidence and review fields.
+Hindi names are preserved; English columns use deterministic transliteration and
+an editable preferred-spelling dictionary, with generated spellings flagged.
 
 Examples:
     python3 voter_pdf_to_csv.py roll.pdf --output-dir outputs
@@ -30,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
@@ -54,7 +57,25 @@ CSV_FIELDS = [
     "serial_number",
     "voter_id",
     "name_hindi",
+    "first_name",
+    "middle_name",
+    "last_name",
+    "name_split_needs_review",
+    "name_english",
+    "english_first_name",
+    "english_middle_name",
+    "english_last_name",
+    "english_name_needs_review",
     "relative_name_hindi",
+    "relative_first_name",
+    "relative_middle_name",
+    "relative_last_name",
+    "relative_name_split_needs_review",
+    "relative_name_english",
+    "relative_english_first_name",
+    "relative_english_middle_name",
+    "relative_english_last_name",
+    "relative_english_name_needs_review",
     "relation_type",
     "house_number_or_address",
     "age",
@@ -76,6 +97,46 @@ CSV_FIELDS = [
 
 class ConversionError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class NameParts:
+    first: str
+    middle: str
+    last: str
+    needs_review: bool
+
+
+@dataclass(frozen=True)
+class EnglishName:
+    full: str
+    first: str
+    middle: str
+    last: str
+    needs_review: bool
+
+
+DEVANAGARI_VOWELS = {
+    "अ": "a", "आ": "aa", "इ": "i", "ई": "ee", "उ": "u", "ऊ": "oo",
+    "ऋ": "ri", "ॠ": "ree", "ऌ": "li", "ए": "e", "ऐ": "ai", "ओ": "o", "औ": "au",
+}
+DEVANAGARI_MATRAS = {
+    "ा": "aa", "ि": "i", "ी": "ee", "ु": "u", "ू": "oo", "ृ": "ri", "ॄ": "ree",
+    "ॅ": "e", "े": "e", "ै": "ai", "ॉ": "o", "ो": "o", "ौ": "au", "ॆ": "e", "ॊ": "o",
+}
+DEVANAGARI_CONSONANTS = {
+    "क": "k", "ख": "kh", "ग": "g", "घ": "gh", "ङ": "ng",
+    "च": "ch", "छ": "chh", "ज": "j", "झ": "jh", "ञ": "ny",
+    "ट": "t", "ठ": "th", "ड": "d", "ढ": "dh", "ण": "n",
+    "त": "t", "थ": "th", "द": "d", "ध": "dh", "न": "n",
+    "प": "p", "फ": "ph", "ब": "b", "भ": "bh", "म": "m",
+    "य": "y", "र": "r", "ल": "l", "व": "v", "श": "sh", "ष": "sh", "स": "s", "ह": "h",
+    "ळ": "l", "क़": "q", "ख़": "kh", "ग़": "gh", "ज़": "z", "ड़": "r", "ढ़": "rh", "फ़": "f", "य़": "y",
+    "क़": "q", "ख़": "kh", "ग़": "gh", "ज़": "z", "ड़": "r", "ढ़": "rh", "फ़": "f", "य़": "y",
+}
+DEVANAGARI_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
+VIRAMA = "्"
+NUKTA = "़"
 
 
 @dataclass
@@ -117,6 +178,133 @@ class Occurrence:
 
 def normalized(text: str) -> str:
     return " ".join((text or "").replace("\n", " ").split())
+
+
+def split_name(full_name: str) -> NameParts:
+    """Split a name without changing or discarding any of its words.
+
+    One- and two-word names are inherently ambiguous. Three-word names use the
+    common first/middle/last convention. Four-or-more-word, repeated-token, and
+    abbreviated names are split deterministically but flagged for review.
+    """
+    words = normalized(full_name).split()
+    if not words:
+        return NameParts("", "", "", True)
+    if len(words) == 1:
+        parts = NameParts(words[0], "", "", True)
+    elif len(words) == 2:
+        parts = NameParts(words[0], "", words[1], True)
+    else:
+        parts = NameParts(words[0], " ".join(words[1:-1]), words[-1], len(words) > 3)
+
+    normalized_tokens = [re.sub(r"[^\w\u0900-\u097f]", "", word).casefold() for word in words]
+    repeated_token = len(set(normalized_tokens)) < len(normalized_tokens)
+    abbreviated_token = any("." in word or "०" in word for word in words)
+    if repeated_token or abbreviated_token:
+        return NameParts(parts.first, parts.middle, parts.last, True)
+    return parts
+
+
+def load_transliteration_overrides(path: Path | None) -> dict[str, str]:
+    """Load preferred spellings from a UTF-8 JSON object."""
+    if path is None:
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ConversionError(f"Transliteration override file was not found: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ConversionError(f"Invalid transliteration override JSON: {path}: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ConversionError("Transliteration overrides must be a JSON object of Hindi-to-English strings.")
+    overrides: dict[str, str] = {}
+    for hindi, english in raw.items():
+        if not isinstance(hindi, str) or not isinstance(english, str):
+            raise ConversionError("Every transliteration override key and value must be a string.")
+        key = normalized(hindi)
+        value = normalized(english)
+        if not key or not value:
+            raise ConversionError("Transliteration override keys and values cannot be blank.")
+        if not re.search(r"[\u0900-\u097f]", key):
+            raise ConversionError(f"Transliteration override key is not Devanagari: {key!r}")
+        if not value.isascii() or not re.fullmatch(r"[A-Za-z0-9 .'-]+", value):
+            raise ConversionError(
+                f"Transliteration override value must use Roman letters: {value!r}"
+            )
+        if key in overrides and overrides[key] != value:
+            raise ConversionError(f"Conflicting preferred spellings for {key!r}.")
+        overrides[key] = value
+    return overrides
+
+
+def _fallback_transliterate_word(word: str) -> str:
+    """Return a deterministic readable Roman fallback for one Devanagari word."""
+    text = unicodedata.normalize("NFC", word).translate(DEVANAGARI_DIGITS)
+    segments: list[tuple[str, bool]] = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        combined = char + NUKTA if index + 1 < len(text) and text[index + 1] == NUKTA else char
+        consonant = DEVANAGARI_CONSONANTS.get(combined) or DEVANAGARI_CONSONANTS.get(char)
+        if consonant:
+            if combined != char:
+                index += 1
+            following = text[index + 1] if index + 1 < len(text) else ""
+            if following == VIRAMA:
+                segments.append((consonant, False))
+                index += 2
+                continue
+            if following in DEVANAGARI_MATRAS:
+                segments.append((consonant + DEVANAGARI_MATRAS[following], False))
+                index += 2
+                continue
+            segments.append((consonant + "a", True))
+        elif char in DEVANAGARI_VOWELS:
+            segments.append((DEVANAGARI_VOWELS[char], False))
+        elif char in {"ं", "ँ"}:
+            segments.append(("n", False))
+        elif char == "ः":
+            segments.append(("h", False))
+        elif char == "ऽ":
+            segments.append(("'", False))
+        elif char in {".", "-", "'", "’", "(", ")"} or char.isascii() and char.isalnum():
+            segments.append((char, False))
+        elif char not in {NUKTA, VIRAMA} and not unicodedata.category(char).startswith("M"):
+            segments.append((char, False))
+        index += 1
+    if segments and segments[-1][1] and segments[-1][0].endswith("a"):
+        segments[-1] = (segments[-1][0][:-1], False)
+    result = "".join(value for value, _ in segments)
+    return result[:1].upper() + result[1:] if result else ""
+
+
+def transliterate_text(text: str, overrides: dict[str, str] | None = None) -> tuple[str, bool]:
+    """Transliterate text word-by-word; fallback spellings require review."""
+    overrides = overrides or {}
+    source = normalized(text)
+    if not source:
+        return "", True
+    if source in overrides:
+        return overrides[source], False
+    output: list[str] = []
+    needs_review = False
+    for word in source.split():
+        if word in overrides:
+            output.append(overrides[word])
+        else:
+            output.append(_fallback_transliterate_word(word))
+            needs_review = True
+    return normalized(" ".join(output)), needs_review
+
+
+def english_name(full_name: str, overrides: dict[str, str] | None = None) -> EnglishName:
+    """Split the Hindi name and transliterate each component consistently."""
+    parts = split_name(full_name)
+    first, first_review = transliterate_text(parts.first, overrides)
+    middle, middle_review = transliterate_text(parts.middle, overrides) if parts.middle else ("", False)
+    last, last_review = transliterate_text(parts.last, overrides) if parts.last else ("", False)
+    full = normalized(" ".join([first, middle, last]))
+    return EnglishName(full, first, middle, last, first_review or middle_review or last_review)
 
 
 def normalize_voter_id(text: str) -> str:
@@ -561,7 +749,10 @@ def ocr_records(
 
 
 def validate_records(
-    records: list[Occurrence], summary: CoverSummary, extraction_errors: list[str]
+    records: list[Occurrence],
+    summary: CoverSummary,
+    extraction_errors: list[str],
+    transliteration_overrides: dict[str, str] | None = None,
 ) -> dict:
     errors = list(extraction_errors)
     warnings: list[str] = []
@@ -600,9 +791,31 @@ def validate_records(
     if derived != official:
         errors.append(f"Derived active-voter totals do not match the cover page: {derived} != {official}")
     review_count = sum(record.needs_review for record in records)
+    name_split_review_count = sum(split_name(record.name).needs_review for record in records)
+    relative_split_review_count = sum(
+        split_name(record.relative_name).needs_review for record in records
+    )
+    english_name_review_count = sum(
+        english_name(record.name, transliteration_overrides).needs_review for record in records
+    )
+    relative_english_name_review_count = sum(
+        english_name(record.relative_name, transliteration_overrides).needs_review
+        for record in records
+    )
     if review_count:
         warnings.append(
             f"{review_count} rows have low OCR confidence and are marked needs_review=Yes."
+        )
+    if name_split_review_count or relative_split_review_count:
+        warnings.append(
+            f"Name splitting requires review for {name_split_review_count} voter names and "
+            f"{relative_split_review_count} relative names."
+        )
+    if english_name_review_count or relative_english_name_review_count:
+        warnings.append(
+            f"English spelling requires review for {english_name_review_count} voter names and "
+            f"{relative_english_name_review_count} relative names. Add preferred spellings to "
+            "the transliteration override file."
         )
     return {
         "result": "FAIL" if errors else ("PASS_WITH_REVIEW" if warnings else "PASS"),
@@ -617,17 +830,48 @@ def validate_records(
             "unique_nonblank_voter_ids": len(set(voter_ids)),
             "blank_voter_ids": len(records) - len(voter_ids),
             "needs_review": review_count,
+            "name_split_needs_review": name_split_review_count,
+            "relative_name_split_needs_review": relative_split_review_count,
+            "english_name_needs_review": english_name_review_count,
+            "relative_english_name_needs_review": relative_english_name_review_count,
         },
     }
 
 
-def csv_row(record: Occurrence, metadata: dict, source: Path) -> dict:
+def csv_row(
+    record: Occurrence,
+    metadata: dict,
+    source: Path,
+    transliteration_overrides: dict[str, str] | None = None,
+) -> dict:
     code = record.deletion_code
+    voter_name = split_name(record.name)
+    relative_name = split_name(record.relative_name)
+    voter_english = english_name(record.name, transliteration_overrides)
+    relative_english = english_name(record.relative_name, transliteration_overrides)
     return {
         "serial_number": record.serial_number,
         "voter_id": record.voter_id,
         "name_hindi": record.name,
+        "first_name": voter_name.first,
+        "middle_name": voter_name.middle,
+        "last_name": voter_name.last,
+        "name_split_needs_review": "Yes" if voter_name.needs_review else "No",
+        "name_english": voter_english.full,
+        "english_first_name": voter_english.first,
+        "english_middle_name": voter_english.middle,
+        "english_last_name": voter_english.last,
+        "english_name_needs_review": "Yes" if voter_english.needs_review else "No",
         "relative_name_hindi": record.relative_name,
+        "relative_first_name": relative_name.first,
+        "relative_middle_name": relative_name.middle,
+        "relative_last_name": relative_name.last,
+        "relative_name_split_needs_review": "Yes" if relative_name.needs_review else "No",
+        "relative_name_english": relative_english.full,
+        "relative_english_first_name": relative_english.first,
+        "relative_english_middle_name": relative_english.middle,
+        "relative_english_last_name": relative_english.last,
+        "relative_english_name_needs_review": "Yes" if relative_english.needs_review else "No",
         "relation_type": record.relation_type,
         "house_number_or_address": record.house_number,
         "age": record.age,
@@ -654,26 +898,125 @@ def write_outputs(
     metadata: dict,
     source: Path,
     audit: dict,
+    transliteration_overrides: dict[str, str] | None = None,
 ) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")
     with temporary.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS, lineterminator="\n")
         writer.writeheader()
-        writer.writerows(csv_row(record, metadata, source) for record in records)
+        writer.writerows(
+            csv_row(record, metadata, source, transliteration_overrides) for record in records
+        )
     os.replace(temporary, output)
     audit_output.write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def verify_written_csv(output: Path, records: list[Occurrence]) -> None:
+def verify_written_csv(
+    output: Path,
+    records: list[Occurrence],
+    transliteration_overrides: dict[str, str] | None = None,
+) -> None:
     with output.open(encoding="utf-8-sig", newline="") as handle:
-        rows = list(csv.DictReader(handle))
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+    if reader.fieldnames != CSV_FIELDS:
+        raise ConversionError("CSV read-back headers do not match the expected schema.")
     if len(rows) != len(records):
         raise ConversionError(f"CSV read-back row count mismatch: {len(rows)} != {len(records)}")
     if [int(row["serial_number"]) for row in rows] != [record.serial_number for record in records]:
         raise ConversionError("CSV read-back serials do not match the extracted records.")
     if any(len(row) != len(CSV_FIELDS) for row in rows):
         raise ConversionError("CSV read-back found a malformed row or column mismatch.")
+    for row, record in zip(rows, records):
+        reconstructed_name = normalized(
+            " ".join([row["first_name"], row["middle_name"], row["last_name"]])
+        )
+        reconstructed_relative = normalized(
+            " ".join(
+                [
+                    row["relative_first_name"],
+                    row["relative_middle_name"],
+                    row["relative_last_name"],
+                ]
+            )
+        )
+        if reconstructed_name != normalized(row["name_hindi"]):
+            raise ConversionError(
+                f"Name components do not reconstruct serial {row['serial_number']}'s full name."
+            )
+        if reconstructed_relative != normalized(row["relative_name_hindi"]):
+            raise ConversionError(
+                f"Relative-name components do not reconstruct serial {row['serial_number']}'s full name."
+            )
+        if row["name_split_needs_review"] not in {"Yes", "No"}:
+            raise ConversionError("Invalid voter-name split review flag in CSV read-back.")
+        if row["relative_name_split_needs_review"] not in {"Yes", "No"}:
+            raise ConversionError("Invalid relative-name split review flag in CSV read-back.")
+        reconstructed_english_name = normalized(
+            " ".join(
+                [row["english_first_name"], row["english_middle_name"], row["english_last_name"]]
+            )
+        )
+        reconstructed_relative_english = normalized(
+            " ".join(
+                [
+                    row["relative_english_first_name"],
+                    row["relative_english_middle_name"],
+                    row["relative_english_last_name"],
+                ]
+            )
+        )
+        if reconstructed_english_name != normalized(row["name_english"]):
+            raise ConversionError(
+                f"English name components do not reconstruct serial {row['serial_number']}'s full name."
+            )
+        if reconstructed_relative_english != normalized(row["relative_name_english"]):
+            raise ConversionError(
+                f"English relative-name components do not reconstruct serial {row['serial_number']}'s full name."
+            )
+        if row["english_name_needs_review"] not in {"Yes", "No"}:
+            raise ConversionError("Invalid English voter-name review flag in CSV read-back.")
+        if row["relative_english_name_needs_review"] not in {"Yes", "No"}:
+            raise ConversionError("Invalid English relative-name review flag in CSV read-back.")
+        expected_voter_english = english_name(record.name, transliteration_overrides)
+        expected_relative_english = english_name(
+            record.relative_name, transliteration_overrides
+        )
+        actual_voter_english = (
+            row["name_english"],
+            row["english_first_name"],
+            row["english_middle_name"],
+            row["english_last_name"],
+            row["english_name_needs_review"],
+        )
+        actual_relative_english = (
+            row["relative_name_english"],
+            row["relative_english_first_name"],
+            row["relative_english_middle_name"],
+            row["relative_english_last_name"],
+            row["relative_english_name_needs_review"],
+        )
+        if actual_voter_english != (
+            expected_voter_english.full,
+            expected_voter_english.first,
+            expected_voter_english.middle,
+            expected_voter_english.last,
+            "Yes" if expected_voter_english.needs_review else "No",
+        ):
+            raise ConversionError(
+                f"English voter-name values changed during CSV write at serial {row['serial_number']}."
+            )
+        if actual_relative_english != (
+            expected_relative_english.full,
+            expected_relative_english.first,
+            expected_relative_english.middle,
+            expected_relative_english.last,
+            "Yes" if expected_relative_english.needs_review else "No",
+        ):
+            raise ConversionError(
+                f"English relative-name values changed during CSV write at serial {row['serial_number']}."
+            )
 
 
 def convert_one(pdf: Path, args, tools: dict[str, str]) -> tuple[Path, dict]:
@@ -681,6 +1024,7 @@ def convert_one(pdf: Path, args, tools: dict[str, str]) -> tuple[Path, dict]:
     audit_output = args.output_dir / f"{pdf.stem}.validation.json"
     if output.exists() and not args.overwrite:
         raise ConversionError(f"Output already exists (use --overwrite): {output}")
+    transliteration_overrides = load_transliteration_overrides(args.transliteration_overrides)
     reader = PdfReader(pdf)
     if reader.is_encrypted:
         raise ConversionError("Encrypted PDFs are not supported.")
@@ -708,7 +1052,7 @@ def convert_one(pdf: Path, args, tools: dict[str, str]) -> tuple[Path, dict]:
             args.name_confidence,
             args.relative_confidence,
         )
-    audit = validate_records(records, summary, extraction_errors)
+    audit = validate_records(records, summary, extraction_errors, transliteration_overrides)
     audit.update(
         {
             "source_pdf": str(pdf.resolve()),
@@ -720,17 +1064,38 @@ def convert_one(pdf: Path, args, tools: dict[str, str]) -> tuple[Path, dict]:
                 "name_review_threshold": args.name_confidence,
                 "relative_review_threshold": args.relative_confidence,
             },
+            "transliteration": {
+                "method": "deterministic Hindi-to-Roman transliteration with preferred-spelling overrides",
+                "override_file": str(args.transliteration_overrides.resolve())
+                if args.transliteration_overrides
+                else None,
+                "override_count": len(transliteration_overrides),
+                "legal_spelling_authoritative": False,
+            },
         }
     )
     if audit["errors"]:
         audit_output.parent.mkdir(parents=True, exist_ok=True)
         audit_output.write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
         raise ConversionError("Validation failed; CSV was not written. See " + str(audit_output))
-    write_outputs(output, audit_output, records, metadata, pdf, audit)
-    verify_written_csv(output, records)
-    if args.fail_on_review and audit["derived_summary"]["needs_review"]:
+    write_outputs(
+        output, audit_output, records, metadata, pdf, audit, transliteration_overrides
+    )
+    verify_written_csv(output, records, transliteration_overrides)
+    total_review = sum(
+        audit["derived_summary"][key]
+        for key in (
+            "needs_review",
+            "name_split_needs_review",
+            "relative_name_split_needs_review",
+            "english_name_needs_review",
+            "relative_english_name_needs_review",
+        )
+    )
+    if args.fail_on_review and total_review:
         raise ConversionError(
-            f"CSV was written, but {audit['derived_summary']['needs_review']} OCR rows require review."
+            "CSV was written, but OCR, name-split, or English-spelling review is required; "
+            "see the validation report."
         )
     return output, audit
 
@@ -783,7 +1148,7 @@ def interactive_argv() -> list[str]:
     print("\n┌──────────────────────────────────────────────┐")
     print("│     Rajasthan Voter PDF → CSV Converter     │")
     print("└──────────────────────────────────────────────┘")
-    print("Strict totals validation • Hindi OCR • Batch mode\n")
+    print("Strict totals validation • Hindi OCR • English names • Batch mode\n")
     while True:
         folder_text = ask("Folder containing voter PDFs", str(Path.cwd()))
         folder = Path(folder_text).expanduser().resolve()
@@ -811,7 +1176,9 @@ def interactive_argv() -> list[str]:
             print("  Invalid selection. Use 'all', a number, commas, or a range.\n")
 
     output_dir = Path(ask("Output folder", str(folder / "voter_csv"))).expanduser().resolve()
-    fail_on_review = ask("Treat low-confidence OCR as a failed run? (y/N)", "n").lower().startswith("y")
+    fail_on_review = ask(
+        "Treat any OCR, name-split, or English-spelling review as a failed run? (y/N)", "n"
+    ).lower().startswith("y")
     jobs = ask("Parallel OCR jobs", str(min(4, os.cpu_count() or 1)))
     overwrite = ask("Overwrite existing CSV files? (y/N)", "n").lower().startswith("y")
 
@@ -850,6 +1217,9 @@ Ubuntu/Debian:
 
 Each successful PDF produces a .csv file and a .validation.json audit report.
 Rows with uncertain Hindi OCR are retained and marked needs_review=Yes.
+English spellings are transliterations, not legal translations. Unknown spellings
+are retained and marked english_name_needs_review=Yes. Preferred spellings can be
+added to transliteration_overrides.json.
 Use --fail-on-review when a nonzero exit status is required for those rows.
 """,
     )
@@ -863,6 +1233,11 @@ Use --fail-on-review when a nonzero exit status is required for those rows.
     parser.add_argument("--name-confidence", type=float, default=75.0)
     parser.add_argument("--relative-confidence", type=float, default=70.0)
     parser.add_argument("--fail-on-review", action="store_true")
+    parser.add_argument(
+        "--transliteration-overrides",
+        type=Path,
+        help="UTF-8 JSON object containing preferred Hindi-to-English spellings",
+    )
     parser.add_argument("--municipality", help="Override municipality metadata")
     parser.add_argument("--ward-number", type=int, help="Override ward metadata")
     parser.add_argument("--part-number", type=int, help="Override part metadata")
@@ -878,6 +1253,11 @@ Use --fail-on-review when a nonzero exit status is required for those rows.
         bundled_tessdata = Path(__file__).resolve().with_name("tessdata")
         if (bundled_tessdata / "hin.traineddata").is_file():
             args.tessdata_dir = bundled_tessdata
+    if args.transliteration_overrides:
+        args.transliteration_overrides = args.transliteration_overrides.expanduser().resolve()
+    else:
+        bundled_overrides = Path(__file__).resolve().with_name("transliteration_overrides.json")
+        args.transliteration_overrides = bundled_overrides if bundled_overrides.is_file() else None
     args.output_dir = args.output_dir.expanduser().resolve()
     return args
 
@@ -903,10 +1283,20 @@ def main(argv: list[str] | None = None) -> int:
         try:
             output, audit = convert_one(pdf, args, tools)
             summary = audit["derived_summary"]
+            review_total = sum(
+                summary[key]
+                for key in (
+                    "needs_review",
+                    "name_split_needs_review",
+                    "relative_name_split_needs_review",
+                    "english_name_needs_review",
+                    "relative_english_name_needs_review",
+                )
+            )
             print(
                 f"  PASS: {output} | rows={summary['record_count']} "
                 f"active={summary['active_count']} deleted={summary['deleted_count']} "
-                f"review={summary['needs_review']}"
+                f"review_flags={review_total}"
             )
         except (ConversionError, OSError, ValueError) as exc:
             failures += 1
