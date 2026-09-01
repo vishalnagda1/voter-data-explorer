@@ -45,12 +45,6 @@ try:
 except ImportError as exc:  # pragma: no cover - dependency failure path
     raise SystemExit("Missing Python dependency: run './setup_voter_converter.sh'.") from exc
 
-try:
-    from indic_transliteration import sanscript
-except ImportError:  # pragma: no cover - the built-in fallback remains usable
-    sanscript = None
-
-
 ID_RE = re.compile(r"^(?:[A-Z]{3}\d{7}|RJ/\d{2}/\d{3}/\d+)$")
 SIMPLE_HOUSE_RE = re.compile(r"[0-9०-९A-Za-z/,.\- ]*")
 DELETION_REASONS = {
@@ -138,11 +132,11 @@ class EnglishName:
 
 
 DEVANAGARI_VOWELS = {
-    "अ": "a", "आ": "aa", "इ": "i", "ई": "ee", "उ": "u", "ऊ": "oo",
-    "ऋ": "ri", "ॠ": "ree", "ऌ": "li", "ए": "e", "ऐ": "ai", "ओ": "o", "औ": "au",
+    "अ": "a", "आ": "a", "इ": "i", "ई": "i", "उ": "u", "ऊ": "u",
+    "ऋ": "ri", "ॠ": "ri", "ऌ": "li", "ए": "e", "ऐ": "ai", "ओ": "o", "औ": "au",
 }
 DEVANAGARI_MATRAS = {
-    "ा": "aa", "ि": "i", "ी": "ee", "ु": "u", "ू": "oo", "ृ": "ri", "ॄ": "ree",
+    "ा": "a", "ि": "i", "ी": "i", "ु": "u", "ू": "u", "ृ": "ri", "ॄ": "ri",
     "ॅ": "e", "े": "e", "ै": "ai", "ॉ": "o", "ो": "o", "ौ": "au", "ॆ": "e", "ॊ": "o",
 }
 DEVANAGARI_CONSONANTS = {
@@ -265,7 +259,13 @@ def load_transliteration_overrides(path: Path | None) -> dict[str, str]:
 
 
 def _fallback_transliterate_word(word: str) -> str:
-    """Return a deterministic readable Roman fallback for one Devanagari word."""
+    """Return a deterministic, common-spelling Roman form of a Hindi word.
+
+    This intentionally uses the single-vowel spellings normally found in Indian
+    names (Dangi, Sita, Poonam only when explicitly preferred) rather than a
+    lossless Sanskrit romanization (Daangee, Seetaa). Preferred exceptions still
+    belong in the override dictionary.
+    """
     text = unicodedata.normalize("NFC", word).translate(DEVANAGARI_DIGITS)
     segments: list[tuple[str, bool]] = []
     index = 0
@@ -274,6 +274,20 @@ def _fallback_transliterate_word(word: str) -> str:
         combined = char + NUKTA if index + 1 < len(text) and text[index + 1] == NUKTA else char
         consonant = DEVANAGARI_CONSONANTS.get(combined) or DEVANAGARI_CONSONANTS.get(char)
         if consonant:
+            # व is pronounced between English v and w. Common Hindi-name
+            # spellings use w after anusvara, in conjuncts such as स्व, श्व, and
+            # द्व, and in the Rajasthani surname suffix -ावत (Kunwar, Swar,
+            # Rajeshwari, Godawat), but v elsewhere (Vinod, Ravi).
+            previous = text[index - 1] if index else ""
+            rajasthani_awat_suffix = (
+                char == "व"
+                and previous == "ा"
+                and text[index + 1:] == "त"
+            )
+            if char == "व" and (
+                previous in {"ं", "ँ", VIRAMA} or rajasthani_awat_suffix
+            ):
+                consonant = "w"
             if combined != char:
                 index += 1
             following = text[index + 1] if index + 1 < len(text) else ""
@@ -289,7 +303,11 @@ def _fallback_transliterate_word(word: str) -> str:
         elif char in DEVANAGARI_VOWELS:
             segments.append((DEVANAGARI_VOWELS[char], False))
         elif char in {"ं", "ँ"}:
-            segments.append(("n", False))
+            # Anusvara assimilates to a following labial consonant. In common
+            # English name spellings the other consonant classes use "n":
+            # पंकज -> Pankaj, संजय -> Sanjay, संपत -> Sampat.
+            following = text[index + 1] if index + 1 < len(text) else ""
+            segments.append(("m" if following in "पफबभम" else "n", False))
         elif char == "ः":
             segments.append(("h", False))
         elif char == "ऽ":
@@ -300,47 +318,18 @@ def _fallback_transliterate_word(word: str) -> str:
             segments.append((char, False))
         index += 1
     if segments and segments[-1][1] and segments[-1][0].endswith("a"):
-        segments[-1] = (segments[-1][0][:-1], False)
+        joined = "".join(value for value, _ in segments)
+        # Hindi normally drops a final inherent schwa, but common conjunct-r
+        # endings retain it: महेंद्र -> Mahendra, पवित्र -> Pavitra.
+        if not joined.endswith(("dra", "tra")):
+            segments[-1] = (segments[-1][0][:-1], False)
     result = "".join(value for value, _ in segments)
     return result[:1].upper() + result[1:] if result else ""
 
 
-def _roman_title(text: str) -> str:
-    """Format a generated ASCII romanization like a personal name."""
-    return re.sub(
-        r"[A-Za-z]+",
-        lambda match: match.group(0)[:1].upper() + match.group(0)[1:].lower(),
-        normalized(text),
-    )
-
-
 @lru_cache(maxsize=8192)
-def _library_transliterate_word(word: str) -> str:
-    """Use a maintained Indic engine, retaining the local algorithm as backup."""
-    if sanscript is None:
-        return _fallback_transliterate_word(word)
-    try:
-        roman = sanscript.transliterate(
-            normalized_transliteration_source(word),
-            sanscript.DEVANAGARI,
-            sanscript.OPTITRANS,
-        )
-        roman = sanscript.SCHEMES[sanscript.OPTITRANS].to_lay_indian(roman)
-        # OPTITRANS preserves Sanskrit-style final schwas. Hindi personal names
-        # conventionally omit the final short "a" (rajesha -> Rajesh).
-        if (
-            len(roman) > 2
-            and roman.endswith("a")
-            and not roman.endswith(("dra", "tra"))
-        ):
-            roman = roman[:-1]
-        # Normalize an anusvara before dental consonants for common Hindi names
-        # such as महेंद्र (mahemdra -> Mahendra).
-        roman = re.sub(r"m(?=[dtn])", "n", roman)
-        if roman and roman.isascii() and re.fullmatch(r"[A-Za-z0-9 .'-]+", roman):
-            return _roman_title(roman)
-    except (AttributeError, KeyError, TypeError, ValueError):
-        pass
+def _generated_transliterate_word(word: str) -> str:
+    """Generate a stable Hindi-name spelling independent of package versions."""
     return _fallback_transliterate_word(word)
 
 
@@ -358,7 +347,7 @@ def transliterate_text(text: str, overrides: dict[str, str] | None = None) -> tu
         if word in overrides:
             output.append(overrides[word])
         else:
-            output.append(_library_transliterate_word(word))
+            output.append(_generated_transliterate_word(word))
             needs_review = True
     return normalized(" ".join(output)), needs_review
 
@@ -1249,8 +1238,7 @@ def convert_one(pdf: Path, args, tools: dict[str, str]) -> tuple[Path, dict]:
             },
             "transliteration": {
                 "method": (
-                    "preferred-spelling overrides, then indic-transliteration OPTITRANS, "
-                    "then deterministic built-in fallback"
+                    "preferred-spelling overrides, then deterministic Hindi-name rules"
                 ),
                 "override_file": str(args.transliteration_overrides.resolve())
                 if args.transliteration_overrides

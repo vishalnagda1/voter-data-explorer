@@ -45,6 +45,71 @@ class TransliterationTests(unittest.TestCase):
             "धर्मेंद्र": "Dharmendra",
             "रवीन्द्र": "Ravindra",
             "ओमप्रकाश": "Omaprakash",
+            "पंकज": "Pankaj",
+            "डांगी": "Dangi",
+        }
+        for hindi, english in expected.items():
+            with self.subTest(hindi=hindi):
+                result, needs_review = transliterate_text(hindi, {})
+                self.assertEqual(result, english)
+                self.assertTrue(needs_review)
+
+    def test_preferred_spellings_fix_ambiguous_schwas_and_v_or_w(self):
+        expected = {
+            "पंकज": "Pankaj",
+            "डांगी": "Dangi",
+            "भंवर लाल": "Bhanwar Lal",
+            "प्रेमलता": "Premlata",
+        }
+        for hindi, english in expected.items():
+            with self.subTest(hindi=hindi):
+                result, needs_review = transliterate_text(hindi, self.overrides)
+                self.assertEqual(result, english)
+                self.assertFalse(needs_review)
+
+    def test_preferred_spellings_preserve_conventional_long_vowels(self):
+        expected = {
+            "प्रदीप": "Pradeep",
+            "प्रवीण": "Praveen",
+            "संदीप": "Sandeep",
+            "मीरा": "Meera",
+            "मान": "Maan",
+            "शीतल": "Sheetal",
+            "नवीन": "Naveen",
+            "शीनू": "Sheenu",
+            "गिरधारी": "Girdhari",
+            "भगवान": "Bhagwan",
+            "तिवारी": "Tiwari",
+        }
+        for hindi, english in expected.items():
+            with self.subTest(hindi=hindi):
+                result, needs_review = transliterate_text(hindi, self.overrides)
+                self.assertEqual(result, english)
+                self.assertFalse(needs_review)
+
+    def test_pra_conjunct_is_not_dropped_from_generated_spelling(self):
+        result, needs_review = transliterate_text("प्रदीप", {})
+        self.assertEqual(result, "Pradip")
+        self.assertTrue(needs_review)
+
+    def test_anusvara_uses_n_except_before_labial_consonants(self):
+        expected = {"पंकज": "Pankaj", "संजय": "Sanjay", "संपत": "Sampat"}
+        for hindi, english in expected.items():
+            with self.subTest(hindi=hindi):
+                result, needs_review = transliterate_text(hindi, {})
+                self.assertEqual(result, english)
+                self.assertTrue(needs_review)
+
+    def test_v_or_w_is_selected_from_devanagari_context(self):
+        expected = {
+            "कुंवर": "Kunwar",
+            "स्वर": "Swar",
+            "राजेश्वरी": "Rajeshwari",
+            "गोदावत": "Godawat",
+            "राणावत": "Ranawat",
+            "रावत": "Rawat",
+            "विनोद": "Vinod",
+            "रवीन्द्र": "Ravindra",
         }
         for hindi, english in expected.items():
             with self.subTest(hindi=hindi):
