@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import difflib
 import json
 import os
 import re
@@ -453,12 +454,146 @@ def infer_filename_metadata(path: Path) -> dict:
     stem = path.stem
     ward = re.search(r"Ward\s*No[-_ ]*(\d+)", stem, re.IGNORECASE)
     part = re.search(r"Part\s*No[-_ ]*(\d+)", stem, re.IGNORECASE)
-    municipality = re.search(r"WithPhoto[_ -]+(.+?)[-_ ]+Ward\s*No", stem, re.IGNORECASE)
+    municipality = re.search(
+        r"^(?:WithPhoto[_ -]+)?(.+?)[-_ ]+Ward\s*No", stem, re.IGNORECASE
+    )
     return {
         "ward_number": int(ward.group(1)) if ward else "",
         "part_number": int(part.group(1)) if part else "",
         "municipality": normalized(municipality.group(1).replace("_", " ")) if municipality else "",
     }
+
+
+def grouped_ocr_lines(words: list[dict], *, max_top: int | None = None) -> list[list[dict]]:
+    """Return OCR words grouped into visually ordered Tesseract lines."""
+    grouped: dict[tuple, list[dict]] = defaultdict(list)
+    for word in words:
+        if max_top is not None and word["top"] > max_top:
+            continue
+        grouped[word["line"]].append(word)
+    return sorted(
+        (sorted(group, key=lambda word: word["left"]) for group in grouped.values()),
+        key=lambda group: (min(word["top"] for word in group), group[0]["left"]),
+    )
+
+
+def ocr_line_text(words: list[dict]) -> str:
+    return normalized(" ".join(word["text"] for word in words))
+
+
+def value_after_ocr_colon(text: str) -> str:
+    match = re.search(r"[:ः]\s*(.+)$", normalized(text))
+    if not match:
+        return ""
+    return match.group(1).strip(" .,:;।-'\"")
+
+
+def embedded_number_for_ocr_line(
+    line: list[dict], embedded_items: list[dict], dpi: int
+) -> int | None:
+    """Use an OCR label to locate its exact number in the PDF text layer."""
+    scale = dpi / 72
+    line_x_pt = min(word["left"] for word in line) / scale
+    centers = sorted(word["top"] + word["height"] / 2 for word in line)
+    # OCR boxes use their visual center; PDF text coordinates use the baseline.
+    line_y_pt = centers[len(centers) // 2] / scale + 6
+    candidates: list[tuple[float, int]] = []
+    for item in embedded_items:
+        text = normalized(item["text"]).translate(DEVANAGARI_DIGITS)
+        numbers = re.findall(r"\d+", text)
+        if not numbers or abs(abs(item["y"]) - line_y_pt) > 10:
+            continue
+        score = abs(item["x"] - line_x_pt) + 3 * abs(abs(item["y"]) - line_y_pt)
+        candidates.append((score, int(numbers[-1])))
+    if candidates:
+        return min(candidates)[1]
+
+    ocr_numbers = re.findall(
+        r"\d+", ocr_line_text(line).translate(DEVANAGARI_DIGITS)
+    )
+    return int(ocr_numbers[-1]) if ocr_numbers else None
+
+
+def infer_document_metadata(
+    header_words: list[dict],
+    embedded_items: list[dict],
+    dpi: int,
+    transliteration_overrides: dict[str, str] | None = None,
+) -> dict:
+    """Infer administrative metadata from the PDF, independently of its name."""
+    lines = grouped_ocr_lines(header_words, max_top=int(170 * dpi / 72))
+    normalized_lines = [(line, ocr_line_text(line)) for line in lines]
+    all_header_text = " ".join(text for _, text in normalized_lines)
+
+    if re.search(r"ग्राम\s*पंचायत|ग्रामपंचायत|पंचायत\s+चुनाव", all_header_text):
+        roll_type = "panchayat"
+    elif re.search(r"नगर\s*निगम|नगरनिगम|नगर\s*परिषद|नगरपालिका", all_header_text):
+        roll_type = "municipal"
+    else:
+        roll_type = "unknown"
+
+    location_hindi = ""
+    ward_number: int | str = ""
+    part_number: int | str = ""
+    for line, text in normalized_lines:
+        if not location_hindi:
+            is_panchayat_name = roll_type == "panchayat" and re.search(
+                r"ग्राम\s*पंचायत|ग्रामपंचायत", text
+            )
+            is_municipal_name = roll_type == "municipal" and re.search(
+                r"नगर\s*निगम|नगरनिगम|नगर\s*परिषद|नगरपरिषद|नगरपालिका", text
+            ) and "नाम" in text
+            if is_panchayat_name or is_municipal_name:
+                location_hindi = value_after_ocr_colon(text)
+
+        if "वार्ड" in text and re.search(r"संख्या|क्रमांक", text):
+            ward_number = embedded_number_for_ocr_line(line, embedded_items, dpi) or ""
+        elif "भाग" in text and "संख्या" in text:
+            part_number = embedded_number_for_ocr_line(line, embedded_items, dpi) or ""
+
+    location_english = ""
+    if location_hindi:
+        location_english, _ = transliterate_text(
+            location_hindi, transliteration_overrides or {}
+        )
+    return {
+        "roll_type": roll_type,
+        "municipality_hindi": location_hindi,
+        "municipality": location_english,
+        "ward_number": ward_number,
+        "part_number": part_number,
+        "metadata_source": "pdf_header_ocr_and_text_layer",
+    }
+
+
+def filename_location_matches_document(filename_value: str, document_value: str) -> bool:
+    """Allow a richer filename location only after the PDF confirms its identity."""
+    document_key = re.sub(r"[^a-z]", "", document_value.casefold())
+    filename_tokens = re.findall(r"[a-z]+", filename_value.casefold())
+    if not document_key or not filename_tokens:
+        return False
+    return max(
+        difflib.SequenceMatcher(None, document_key, token).ratio()
+        for token in filename_tokens
+    ) >= 0.78
+
+
+def merge_detected_metadata(document: dict, filename: dict) -> dict:
+    """Prefer PDF-derived metadata and use a verified filename only as enrichment."""
+    merged = dict(document)
+    filename_location = normalized(str(filename.get("municipality", "")))
+    document_location = normalized(str(document.get("municipality", "")))
+    if filename_location_matches_document(filename_location, document_location):
+        merged["municipality"] = filename_location
+        merged["metadata_source"] = "pdf_header_verified_filename_enrichment"
+    elif not document_location and filename_location:
+        merged["municipality"] = filename_location
+        merged["metadata_source"] += "+filename_fallback"
+    for field in ("ward_number", "part_number"):
+        if merged.get(field, "") == "" and filename.get(field, "") != "":
+            merged[field] = filename[field]
+            merged["metadata_source"] += "+filename_fallback"
+    return merged
 
 
 def cell_left(x: float) -> float:
@@ -658,7 +793,11 @@ def ensure_hindi_model(tesseract: str, tessdata_dir: Path | None) -> None:
 def load_tsv(path: Path) -> list[dict]:
     words: list[dict] = []
     with path.open(encoding="utf-8") as handle:
-        for row in csv.DictReader(handle, delimiter="\t"):
+        # Tesseract TSV is an unquoted, tab-delimited format. OCR output can
+        # legitimately begin with a double quote (for example, a misread image
+        # placeholder). Treating that quote as CSV syntax can merge several
+        # physical TSV rows and silently discard words from later voter cells.
+        for row in csv.DictReader(handle, delimiter="\t", quoting=csv.QUOTE_NONE):
             if row.get("level") != "5" or not row.get("text", "").strip():
                 continue
             try:
@@ -710,14 +849,44 @@ def extract_ocr_line(
     by_line: dict[tuple, list[tuple[dict, float]]] = defaultdict(list)
     for word, center_y in candidates:
         by_line[word["line"]].append((word, center_y))
-    selected = min(
-        by_line.values(),
-        key=lambda group: abs(sorted(center_y for _, center_y in group)[len(group) // 2] - target_y),
-    )
-    ordered = sorted((word for word, _ in selected), key=lambda word: word["left"])
-    text = clean_ocr_field(" ".join(word["text"] for word in ordered), field)
-    confidence = sum(max(0.0, word["conf"]) for word in ordered) / len(ordered)
-    return text, round(confidence, 1)
+
+    # Some supported rolls contain the literal text "Photo is Available" in
+    # each voter cell. With Hindi-only OCR it becomes low-confidence garbage on
+    # the same Tesseract line as the name. Keep the contiguous field segment at
+    # the left of the cell and stop before a large horizontal gap. The gap is
+    # DPI-scaled and remains wide enough to retain separated house numbers.
+    max_field_gap = 90 * dpi / 300
+    line_options: list[tuple[float, float, str]] = []
+    for group in by_line.values():
+        ordered = sorted((word for word, _ in group), key=lambda word: word["left"])
+        field_segment = [ordered[0]]
+        for word in ordered[1:]:
+            previous = field_segment[-1]
+            gap = word["left"] - (previous["left"] + previous["width"])
+            if gap > max_field_gap:
+                break
+            field_segment.append(word)
+
+        text = clean_ocr_field(" ".join(word["text"] for word in field_segment), field)
+        if not text:
+            continue
+        center_ys = sorted(
+            word["top"] + word["height"] / 2 for word in field_segment
+        )
+        distance = abs(center_ys[len(center_ys) // 2] - target_y)
+        confidence = sum(max(0.0, word["conf"]) for word in field_segment) / len(
+            field_segment
+        )
+        line_options.append((distance, -confidence, text))
+
+    if not line_options:
+        return "", 0.0
+
+    # Tesseract occasionally divides one printed field into a label-only line
+    # and a nearby value-only line. Discarding empty cleaned labels above lets
+    # the value line win while the distance keeps normal layouts unchanged.
+    _, negative_confidence, text = min(line_options, key=lambda option: option[:2])
+    return text, round(-negative_confidence, 1)
 
 
 def choose_house(raw: str, ocr: str) -> str:
@@ -745,7 +914,7 @@ def ocr_records(
     jobs: int,
     name_threshold: float,
     relative_threshold: float,
-) -> None:
+) -> tuple[int, list[dict]]:
     clean_pdf = workdir / "no-images.pdf"
     rendered_dir = workdir / "pages"
     ocr_dir = workdir / "ocr"
@@ -794,6 +963,19 @@ def ocr_records(
             page, tsv = future.result()
             page_words[page] = load_tsv(tsv)
 
+    # Sparse-text OCR reads table-contained header fields more reliably than
+    # the dense page segmentation used for voter cards. Run it once on the
+    # first record page so metadata never depends on a filename convention.
+    header_page = min(pages)
+    header_image = rendered_dir / f"page-{header_page:04d}.png"
+    header_output_base = ocr_dir / f"header-page-{header_page:04d}"
+    header_command = [tesseract, str(header_image), str(header_output_base), "-l", "hin"]
+    if tessdata_dir:
+        header_command.extend(["--tessdata-dir", str(tessdata_dir)])
+    header_command.extend(["--psm", "11", "-c", "tessedit_create_tsv=1"])
+    run(header_command)
+    header_words = load_tsv(header_output_base.with_suffix(".tsv"))
+
     for record in records:
         words = page_words[record.page]
         name, name_conf = extract_ocr_line(words, record.cell_left_pt, record.name_y_pt, "name", dpi)
@@ -813,6 +995,7 @@ def ocr_records(
             or name_conf < name_threshold
             or relative_conf < relative_threshold
         )
+    return header_page, header_words
 
 
 def validate_records(
@@ -1202,17 +1385,10 @@ def convert_one(pdf: Path, args, tools: dict[str, str]) -> tuple[Path, dict]:
         raise ConversionError("Encrypted PDFs are not supported.")
     occurrences, summary, roll_year = extract_occurrences(reader)
     records, extraction_errors = choose_primary_records(occurrences, summary)
-    metadata = infer_filename_metadata(pdf)
-    metadata["roll_year"] = args.roll_year or roll_year or ""
-    if args.municipality:
-        metadata["municipality"] = args.municipality
-    if args.ward_number is not None:
-        metadata["ward_number"] = args.ward_number
-    if args.part_number is not None:
-        metadata["part_number"] = args.part_number
+    filename_metadata = infer_filename_metadata(pdf)
 
     with tempfile.TemporaryDirectory(prefix="voter_pdf_") as temp_name:
-        ocr_records(
+        header_page, header_words = ocr_records(
             pdf,
             records,
             Path(temp_name),
@@ -1224,7 +1400,29 @@ def convert_one(pdf: Path, args, tools: dict[str, str]) -> tuple[Path, dict]:
             args.name_confidence,
             args.relative_confidence,
         )
+        document_metadata = infer_document_metadata(
+            header_words,
+            page_items(reader.pages[header_page - 1]),
+            args.dpi,
+            transliteration_overrides,
+        )
+    metadata = merge_detected_metadata(document_metadata, filename_metadata)
+    metadata["roll_year"] = args.roll_year or roll_year or ""
+    if args.municipality:
+        metadata["municipality"] = args.municipality
+        metadata["metadata_source"] = "explicit_cli_override"
+    if args.ward_number is not None:
+        metadata["ward_number"] = args.ward_number
+        metadata["metadata_source"] = "explicit_cli_override"
+    if args.part_number is not None:
+        metadata["part_number"] = args.part_number
+        metadata["metadata_source"] = "explicit_cli_override"
     audit = validate_records(records, summary, extraction_errors, transliteration_overrides)
+    if metadata["roll_type"] == "unknown":
+        audit["warnings"].append(
+            "The roll type could not be identified from the PDF header; voter-card "
+            "structure and totals still validated."
+        )
     audit.update(
         {
             "source_pdf": str(pdf.resolve()),
