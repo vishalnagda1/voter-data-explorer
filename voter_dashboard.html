@@ -267,6 +267,41 @@
     .search-wrap { position: relative; }
     .search-wrap input { padding-left: 35px; }
     .search-wrap::before { content: "⌕"; position: absolute; left: 12px; top: 7px; color: var(--teal); font-size: 22px; line-height: 1; }
+    .search-suggestions {
+      position: absolute;
+      top: calc(100% + 5px);
+      left: 0;
+      right: 0;
+      z-index: 30;
+      overflow: hidden;
+      max-height: 360px;
+      overflow-y: auto;
+      padding: 5px;
+      background: #fff;
+      border: 1px solid #cfcbc1;
+      border-radius: 10px;
+      box-shadow: 0 14px 34px rgba(23,42,50,.16);
+    }
+    .search-suggestions[hidden] { display: none; }
+    .search-suggestion {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 12px;
+      width: 100%;
+      padding: 9px 10px;
+      color: var(--ink);
+      background: transparent;
+      border: 0;
+      border-radius: 7px;
+      text-align: left;
+      cursor: pointer;
+    }
+    .search-suggestion:hover, .search-suggestion.active { background: var(--teal-soft); }
+    .search-suggestion span { min-width: 0; }
+    .search-suggestion b, .search-suggestion em, .search-suggestion small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .search-suggestion b, .search-suggestion em { font-size: 12px; font-style: normal; }
+    .search-suggestion em { color: var(--teal-dark); }
+    .search-suggestion small { margin-top: 3px; color: var(--muted); font-size: 10px; }
     .age-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
     .filter-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; }
     .filter-buttons, .active-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
@@ -530,14 +565,17 @@
         <div class="filter-grid">
           <div class="field field-search">
             <label for="globalSearch">Search every field</label>
-            <div class="search-wrap"><input id="globalSearch" type="search" placeholder="Name, voter ID, relative, address…" autocomplete="off"></div>
+            <div class="search-wrap">
+              <input id="globalSearch" type="search" placeholder="Name, voter ID, relative, address…" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="searchSuggestions">
+              <div class="search-suggestions" id="searchSuggestions" role="listbox" aria-label="Search suggestions" hidden></div>
+            </div>
           </div>
           <div class="field"><label for="lastNameHindiFilter">Last name (Hindi)</label><input id="lastNameHindiFilter" type="text" list="lastNameHindiOptions" placeholder="उपनाम" autocomplete="off"><datalist id="lastNameHindiOptions"></datalist></div>
           <div class="field"><label for="lastNameEnglishFilter">Last name (English)</label><input id="lastNameEnglishFilter" type="text" list="lastNameEnglishOptions" placeholder="Surname" autocomplete="off"><datalist id="lastNameEnglishOptions"></datalist></div>
           <div class="field"><label for="statusFilter">Status</label><select id="statusFilter"><option value="">All statuses</option></select></div>
           <div class="field"><label for="genderFilter">Gender</label><select id="genderFilter"><option value="">All genders</option></select></div>
           <div class="field"><label for="partFilter">Part</label><select id="partFilter"><option value="">All parts</option></select></div>
-          <div class="field"><label for="relationFilter">Relation</label><select id="relationFilter"><option value="">All relations</option></select></div>
+          <div class="field"><label for="serialNumberFilter">Serial No</label><input id="serialNumberFilter" type="search" inputmode="numeric" placeholder="Enter serial no." autocomplete="off"></div>
           <div class="field"><label for="sourceFilter">Source CSV</label><select id="sourceFilter"><option value="">All files</option></select></div>
           <div class="field"><label>Age range</label><div class="age-fields"><input id="ageMin" type="number" min="0" max="130" placeholder="Min" aria-label="Minimum age"><input id="ageMax" type="number" min="0" max="130" placeholder="Max" aria-label="Maximum age"></div></div>
         </div>
@@ -664,10 +702,20 @@
     const PRINT_DETAILED = ["serial_number", "voter_id", "name_hindi", "relative_name_hindi", "relation_type", "house_number_or_address", "age", "gender", "status", "part_number"];
     const REVIEW_FIELDS = ["needs_review", "name_split_needs_review", "relative_name_split_needs_review", "english_name_needs_review", "relative_english_name_needs_review"];
     const HINDI_FIELDS = new Set(["name_hindi", "first_name", "middle_name", "last_name", "relative_name_hindi", "relative_first_name", "relative_middle_name", "relative_last_name", "gender", "relation_type"]);
+    const SEARCH_FIELD_PAIRS = {
+      name_hindi: "name_english", name_english: "name_hindi",
+      first_name: "english_first_name", english_first_name: "first_name",
+      middle_name: "english_middle_name", english_middle_name: "middle_name",
+      last_name: "english_last_name", english_last_name: "last_name",
+      relative_name_hindi: "relative_name_english", relative_name_english: "relative_name_hindi",
+      relative_first_name: "relative_english_first_name", relative_english_first_name: "relative_first_name",
+      relative_middle_name: "relative_english_middle_name", relative_english_middle_name: "relative_middle_name",
+      relative_last_name: "relative_english_last_name", relative_english_last_name: "relative_last_name"
+    };
     const STORAGE_KEY = "voterDashboard.preferences.v2";
     const DEFAULT_FILTERS = {
       search: "", lastNameHindi: "", lastNameEnglish: "", status: "Active", gender: "",
-      part: "", relation: "", source: "", ageMin: "", ageMax: "", review: ""
+      part: "", serialNumber: "", source: "", ageMin: "", ageMax: "", review: ""
     };
     const storedPreferences = loadPreferences();
     const hasStoredSortColumns = Array.isArray(storedPreferences?.sortColumns);
@@ -692,7 +740,8 @@
       pageSize: [25, 50, 100, 250].includes(Number(storedPreferences?.pageSize)) ? Number(storedPreferences.pageSize) : 50,
       savedFilters: {...DEFAULT_FILTERS, ...(storedPreferences?.filters || {})},
       savedPrintScope: storedPreferences?.printScope === "selected" ? "selected" : "filtered",
-      filtersInitialized: false, searchTimer: null, toastTimer: null, dragColumn: null
+      filtersInitialized: false, searchTimer: null, suggestionTimer: null, searchSuggestions: [], activeSuggestion: -1,
+      toastTimer: null, dragColumn: null
     };
 
     function labelFor(column) {
@@ -758,7 +807,7 @@
         status: $("#statusFilter").value,
         gender: $("#genderFilter").value,
         part: $("#partFilter").value,
-        relation: $("#relationFilter").value,
+        serialNumber: $("#serialNumberFilter").value,
         source: $("#sourceFilter").value,
         ageMin: $("#ageMin").value,
         ageMax: $("#ageMax").value,
@@ -797,7 +846,7 @@
       setSelectPreference("#statusFilter", filters.status, "Active");
       setSelectPreference("#genderFilter", filters.gender);
       setSelectPreference("#partFilter", filters.part);
-      setSelectPreference("#relationFilter", filters.relation);
+      $("#serialNumberFilter").value = filters.serialNumber || "";
       setSelectPreference("#sourceFilter", filters.source);
       $("#ageMin").value = filters.ageMin || "";
       $("#ageMax").value = filters.ageMax || "";
@@ -917,7 +966,6 @@
       populateSelect("#statusFilter", "status", "All statuses");
       populateSelect("#genderFilter", "gender", "All genders");
       populateSelect("#partFilter", "part_number", "All parts");
-      populateSelect("#relationFilter", "relation_type", "All relations");
       populateSelect("#sourceFilter", "", "All files", true);
       const datalist = (selector, field) => {
         const unique = [...new Set(valuesFor(field))].sort((a, b) => a.localeCompare(b, ["hi", "en"], {numeric: true, sensitivity: "base"}));
@@ -925,6 +973,85 @@
       };
       datalist("#lastNameHindiOptions", "last_name");
       datalist("#lastNameEnglishOptions", "english_last_name");
+    }
+
+    function suggestionContext(row, field) {
+      const pairedField = SEARCH_FIELD_PAIRS[field];
+      const pairedValue = pairedField ? String(row[pairedField] ?? "").trim() : "";
+      if (pairedValue) return { value: pairedValue, label: labelFor(pairedField) };
+      const hindiName = String(row.name_hindi ?? "").trim();
+      const englishName = String(row.name_english ?? "").trim();
+      const names = [hindiName, englishName].filter(value => value && normal(value) !== normal(row[field]));
+      if (names.length) return { value: names.join(" · "), label: "Voter name" };
+      const voterId = String(row.voter_id ?? "").trim();
+      return voterId && field !== "voter_id" ? { value: voterId, label: labelFor("voter_id") } : null;
+    }
+
+    function findSearchSuggestions(searchText) {
+      const query = normal(searchText);
+      if (!query) return [];
+      const priorities = ["name_hindi", "name_english", "relative_name_hindi", "relative_name_english", "voter_id", "serial_number", "last_name", "english_last_name"];
+      const candidates = new Map();
+      state.rows.forEach(row => state.columns.forEach(field => {
+        const value = String(row[field] ?? "").trim();
+        const searchable = normal(value);
+        if (!value || !searchable.includes(query)) return;
+        const context = suggestionContext(row, field);
+        const key = `${field}\u241f${searchable}\u241f${normal(context?.value)}`;
+        if (candidates.has(key)) return;
+        const priority = priorities.includes(field) ? priorities.indexOf(field) : priorities.length;
+        const score = (searchable === query ? -30 : searchable.startsWith(query) ? -15 : 0) + priority - (context ? 2 : 0);
+        candidates.set(key, { value, field, context, score });
+      }));
+      return [...candidates.values()]
+        .sort((a, b) => a.score - b.score || a.value.localeCompare(b.value, ["hi", "en"], {numeric: true, sensitivity: "base"}))
+        .slice(0, 8);
+    }
+
+    function hideSearchSuggestions() {
+      state.searchSuggestions = [];
+      state.activeSuggestion = -1;
+      $("#searchSuggestions").hidden = true;
+      $("#searchSuggestions").innerHTML = "";
+      $("#globalSearch").setAttribute("aria-expanded", "false");
+      $("#globalSearch").removeAttribute("aria-activedescendant");
+    }
+
+    function setActiveSearchSuggestion(index) {
+      const options = $$("#searchSuggestions [role='option']");
+      if (!options.length) return;
+      state.activeSuggestion = (index + options.length) % options.length;
+      options.forEach((option, optionIndex) => {
+        const active = optionIndex === state.activeSuggestion;
+        option.classList.toggle("active", active);
+        option.setAttribute("aria-selected", String(active));
+      });
+      const activeOption = options[state.activeSuggestion];
+      $("#globalSearch").setAttribute("aria-activedescendant", activeOption.id);
+      activeOption.scrollIntoView({block: "nearest"});
+    }
+
+    function renderSearchSuggestions() {
+      const search = $("#globalSearch");
+      const suggestions = findSearchSuggestions(search.value);
+      if (!suggestions.length || document.activeElement !== search) { hideSearchSuggestions(); return; }
+      state.searchSuggestions = suggestions;
+      state.activeSuggestion = -1;
+      $("#searchSuggestions").innerHTML = suggestions.map((suggestion, index) => `
+        <button class="search-suggestion" id="searchSuggestion${index}" type="button" role="option" aria-selected="false" data-search-suggestion="${index}">
+          <span><b>${escapeHTML(suggestion.value)}</b><small>${escapeHTML(labelFor(suggestion.field))}</small></span>
+          <span>${suggestion.context ? `<em>${escapeHTML(suggestion.context.value)}</em><small>${escapeHTML(suggestion.context.label)}</small>` : ""}</span>
+        </button>`).join("");
+      $("#searchSuggestions").hidden = false;
+      search.setAttribute("aria-expanded", "true");
+    }
+
+    function chooseSearchSuggestion(index) {
+      const suggestion = state.searchSuggestions[index];
+      if (!suggestion) return;
+      $("#globalSearch").value = suggestion.value;
+      hideSearchSuggestions();
+      applyFilters();
     }
 
     function anyReview(row) { return REVIEW_FIELDS.some(field => isYes(row[field])); }
@@ -962,7 +1089,8 @@
       if (search) labels.push(`Search: “${search}”`);
       if ($("#lastNameHindiFilter").value) labels.push(`Hindi last name: ${$("#lastNameHindiFilter").value}`);
       if ($("#lastNameEnglishFilter").value) labels.push(`English last name: ${$("#lastNameEnglishFilter").value}`);
-      [["#statusFilter", "Status"], ["#genderFilter", "Gender"], ["#partFilter", "Part"], ["#relationFilter", "Relation"], ["#sourceFilter", "File"]].forEach(([selector, label]) => {
+      if ($("#serialNumberFilter").value.trim()) labels.push(`Serial No: ${$("#serialNumberFilter").value.trim()}`);
+      [["#statusFilter", "Status"], ["#genderFilter", "Gender"], ["#partFilter", "Part"], ["#sourceFilter", "File"]].forEach(([selector, label]) => {
         if ($(selector).value) labels.push(`${label}: ${$(selector).value}`);
       });
       if ($("#ageMin").value) labels.push(`Age ≥ ${$("#ageMin").value}`);
@@ -979,7 +1107,7 @@
       const status = $("#statusFilter").value;
       const gender = $("#genderFilter").value;
       const part = $("#partFilter").value;
-      const relation = $("#relationFilter").value;
+      const serialNumber = normal($("#serialNumberFilter").value);
       const source = $("#sourceFilter").value;
       const minimumAge = finiteNumber($("#ageMin").value);
       const maximumAge = finiteNumber($("#ageMax").value);
@@ -992,7 +1120,7 @@
         if (status && row.status !== status) return false;
         if (gender && row.gender !== gender) return false;
         if (part && row.part_number !== part) return false;
-        if (relation && row.relation_type !== relation) return false;
+        if (serialNumber && normal(row.serial_number) !== serialNumber) return false;
         if (source && row.__fileName !== source) return false;
         const age = finiteNumber(row.age);
         if (minimumAge !== null && (age === null || age < minimumAge)) return false;
@@ -1370,8 +1498,34 @@
     $("#dropZone").addEventListener("drop", event => loadFiles(event.dataTransfer.files));
     $("#fileRail").addEventListener("click", event => { const button = event.target.closest("[data-remove-file]"); if (button) removeFile(button.dataset.removeFile); });
 
-    ["#globalSearch", "#lastNameHindiFilter", "#lastNameEnglishFilter"].forEach(selector => $(selector).addEventListener("input", () => { clearTimeout(state.searchTimer); state.searchTimer = setTimeout(applyFilters, 140); }));
-    ["#statusFilter", "#genderFilter", "#partFilter", "#relationFilter", "#sourceFilter", "#reviewFilter"].forEach(selector => $(selector).addEventListener("change", applyFilters));
+    $("#globalSearch").addEventListener("input", () => {
+      clearTimeout(state.searchTimer);
+      clearTimeout(state.suggestionTimer);
+      state.searchTimer = setTimeout(applyFilters, 140);
+      state.suggestionTimer = setTimeout(renderSearchSuggestions, 80);
+    });
+    $("#globalSearch").addEventListener("focus", renderSearchSuggestions);
+    $("#globalSearch").addEventListener("keydown", event => {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        if ($("#searchSuggestions").hidden) renderSearchSuggestions();
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        const nextIndex = state.activeSuggestion < 0
+          ? (direction === 1 ? 0 : state.searchSuggestions.length - 1)
+          : state.activeSuggestion + direction;
+        setActiveSearchSuggestion(nextIndex);
+      } else if (event.key === "Enter" && state.activeSuggestion >= 0) {
+        event.preventDefault();
+        chooseSearchSuggestion(state.activeSuggestion);
+      } else if (event.key === "Escape") hideSearchSuggestions();
+    });
+    $("#searchSuggestions").addEventListener("mousedown", event => event.preventDefault());
+    $("#searchSuggestions").addEventListener("click", event => {
+      const option = event.target.closest("[data-search-suggestion]");
+      if (option) chooseSearchSuggestion(Number(option.dataset.searchSuggestion));
+    });
+    ["#lastNameHindiFilter", "#lastNameEnglishFilter", "#serialNumberFilter"].forEach(selector => $(selector).addEventListener("input", () => { clearTimeout(state.searchTimer); state.searchTimer = setTimeout(applyFilters, 140); }));
+    ["#statusFilter", "#genderFilter", "#partFilter", "#sourceFilter", "#reviewFilter"].forEach(selector => $(selector).addEventListener("change", applyFilters));
     ["#ageMin", "#ageMax"].forEach(selector => $(selector).addEventListener("input", () => { clearTimeout(state.searchTimer); state.searchTimer = setTimeout(applyFilters, 180); }));
     $("#resetFiltersButton").addEventListener("click", resetFilters);
     $("#resetAnalyticsButton").addEventListener("click", resetFilters);
@@ -1385,6 +1539,7 @@
     $("#dialogPrintButton").addEventListener("click", prepareAndPrint);
 
     document.addEventListener("click", event => {
+      if (!event.target.closest(".search-wrap")) hideSearchSuggestions();
       const closeButton = event.target.closest("[data-close]");
       if (closeButton) $(`#${closeButton.dataset.close}`).close();
       const preset = event.target.closest("[data-preset]");
