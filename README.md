@@ -17,6 +17,7 @@ Browser preferences such as filters, column order, sorting, and print settings a
 - Build additional rules against any available CSV field.
 - View live demographics, age, status, part, surname, relationship, duplicate-ID, and data-quality analytics.
 - Select, reorder, and persist screen and print columns.
+- Sort by one column, or Shift-click headings to add, reverse, and remove persistent multi-column criteria.
 - Export filtered results as CSV.
 - Print filtered or selected rows on A4 paper or save them as PDF.
 

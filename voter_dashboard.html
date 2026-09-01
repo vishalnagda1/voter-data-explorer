@@ -323,6 +323,7 @@
     .data-title { min-width: 0; }
     .data-title h2 { margin: 0; font-family: Georgia, serif; font-size: 22px; font-weight: 600; }
     .data-title p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+    .sort-hint { padding: 8px 17px; color: var(--muted); background: #faf8f2; border-bottom: 1px solid var(--line); font-size: 11px; }
     .toolbar-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
     .table-wrap { overflow: auto; max-height: 610px; }
     table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; }
@@ -342,6 +343,8 @@
     }
     th:first-child { left: 0; z-index: 4; }
     th button { padding: 0; color: inherit; background: none; border: 0; font: inherit; letter-spacing: inherit; text-transform: inherit; }
+    .sort-indicator { margin-left: 4px; }
+    .sort-priority { display: inline-grid; place-items: center; min-width: 15px; height: 15px; margin-left: 3px; padding: 0 3px; color: #25494c; background: #f7f4ed; border-radius: 999px; font-size: 8px; font-weight: 900; vertical-align: 1px; }
     td { max-width: 260px; padding: 9px 11px; background: #fffdf9; border-bottom: 1px solid #e7e3da; vertical-align: top; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     tbody tr:nth-child(even) td { background: #faf8f2; }
     tbody tr:hover td { background: #f1f7f6; }
@@ -563,8 +566,9 @@
             <button class="btn btn-primary" id="printButton" type="button">Print / Save PDF</button>
           </div>
         </div>
+        <div class="sort-hint" id="sortHint">Click a column heading to sort; click it again to reverse. Shift-click cycles a criterion through ascending, descending, and removed. Numbered badges show priority.</div>
         <div class="table-wrap">
-          <table aria-label="Filtered voter data">
+          <table aria-label="Filtered voter data" aria-describedby="sortHint">
             <thead id="tableHead"></thead>
             <tbody id="tableBody"></tbody>
           </table>
@@ -656,14 +660,25 @@
       part: "", relation: "", source: "", ageMin: "", ageMax: "", review: ""
     };
     const storedPreferences = loadPreferences();
+    const hasStoredSortColumns = Array.isArray(storedPreferences?.sortColumns);
+    const storedSortColumns = hasStoredSortColumns
+      ? storedPreferences.sortColumns.reduce((sorts, item) => {
+          if (item && typeof item.column === "string" && !sorts.some(sort => sort.column === item.column)) {
+            sorts.push({column: item.column, direction: item.direction === "desc" ? "desc" : "asc"});
+          }
+          return sorts;
+        }, [])
+      : [];
 
     const state = {
       files: new Map(), rows: [], columns: [], filtered: [], selected: new Set(),
       viewColumns: Array.isArray(storedPreferences?.viewColumns) ? storedPreferences.viewColumns : [],
       printColumns: Array.isArray(storedPreferences?.printColumns) ? storedPreferences.printColumns : [],
       advancedRules: Array.isArray(storedPreferences?.advancedRules) ? storedPreferences.advancedRules : [],
-      ruleDraft: [], sortColumn: storedPreferences?.sortColumn || "serial_number",
-      sortDirection: storedPreferences?.sortDirection === "desc" ? "desc" : "asc", page: 1,
+      ruleDraft: [],
+      sortColumns: hasStoredSortColumns ? storedSortColumns : [{column: storedPreferences?.sortColumn || "serial_number", direction: storedPreferences?.sortDirection === "desc" ? "desc" : "asc"}],
+      allowEmptySort: hasStoredSortColumns && storedSortColumns.length === 0,
+      page: 1,
       pageSize: [25, 50, 100, 250].includes(Number(storedPreferences?.pageSize)) ? Number(storedPreferences.pageSize) : 50,
       savedFilters: {...DEFAULT_FILTERS, ...(storedPreferences?.filters || {})},
       savedPrintScope: storedPreferences?.printScope === "selected" ? "selected" : "filtered",
@@ -752,8 +767,7 @@
           advancedRules: state.advancedRules,
           viewColumns: state.viewColumns,
           printColumns: state.printColumns,
-          sortColumn: state.sortColumn,
-          sortDirection: state.sortDirection,
+          sortColumns: state.sortColumns,
           pageSize: state.pageSize,
           printScope
         }));
@@ -838,7 +852,8 @@
       const previousView = state.viewColumns.filter(column => columns.includes(column));
       const previousPrint = state.printColumns.filter(column => columns.includes(column));
       state.columns = columns;
-      if (!columns.includes(state.sortColumn)) state.sortColumn = columns[0] || "serial_number";
+      state.sortColumns = state.sortColumns.filter(sort => columns.includes(sort.column));
+      if (!state.sortColumns.length && columns.length && !state.allowEmptySort) state.sortColumns = [{column: columns.includes("serial_number") ? "serial_number" : columns[0], direction: "asc"}];
       state.viewColumns = previousView.length ? previousView : DEFAULT_VIEW.filter(column => columns.includes(column));
       state.printColumns = previousPrint.length ? previousPrint : DEFAULT_PRINT.filter(column => columns.includes(column));
       if (!state.viewColumns.length && columns.length) state.viewColumns = columns.slice(0, 8);
@@ -989,12 +1004,16 @@
     }
 
     function sortFilteredRows() {
-      const column = state.sortColumn;
-      const direction = state.sortDirection === "asc" ? 1 : -1;
       state.filtered.sort((a, b) => {
-        const leftNumber = finiteNumber(a[column]), rightNumber = finiteNumber(b[column]);
-        if (leftNumber !== null && rightNumber !== null) return (leftNumber - rightNumber) * direction;
-        return String(a[column] ?? "").localeCompare(String(b[column] ?? ""), ["hi", "en"], {numeric: true, sensitivity: "base"}) * direction;
+        for (const sort of state.sortColumns) {
+          const direction = sort.direction === "asc" ? 1 : -1;
+          const leftNumber = finiteNumber(a[sort.column]), rightNumber = finiteNumber(b[sort.column]);
+          const comparison = leftNumber !== null && rightNumber !== null
+            ? leftNumber - rightNumber
+            : String(a[sort.column] ?? "").localeCompare(String(b[sort.column] ?? ""), ["hi", "en"], {numeric: true, sensitivity: "base"});
+          if (comparison !== 0) return comparison * direction;
+        }
+        return 0;
       });
     }
 
@@ -1125,10 +1144,17 @@
       const start = (state.page - 1) * state.pageSize;
       const pageRows = state.filtered.slice(start, start + state.pageSize);
       const selectedOnPage = pageRows.length && pageRows.every(row => state.selected.has(row.__rowId));
-      $("#tableHead").innerHTML = `<tr><th><input type="checkbox" id="selectPage" aria-label="Select all rows on this page" ${selectedOnPage ? "checked" : ""}></th>${state.viewColumns.map(column => `<th><button type="button" data-sort="${escapeHTML(column)}">${escapeHTML(labelFor(column))}${state.sortColumn === column ? (state.sortDirection === "asc" ? " ↑" : " ↓") : ""}</button></th>`).join("")}</tr>`;
+      $("#tableHead").innerHTML = `<tr><th><input type="checkbox" id="selectPage" aria-label="Select all rows on this page" ${selectedOnPage ? "checked" : ""}></th>${state.viewColumns.map(column => {
+        const sortIndex = state.sortColumns.findIndex(sort => sort.column === column);
+        const sort = state.sortColumns[sortIndex];
+        const indicator = sort ? `<span class="sort-indicator" aria-hidden="true">${sort.direction === "asc" ? "↑" : "↓"}</span><span class="sort-priority" aria-hidden="true">${sortIndex + 1}</span>` : "";
+        const sortState = sort ? `${sort.direction === "asc" ? "ascending" : "descending"}, priority ${sortIndex + 1}` : "not sorted";
+        return `<th${sortIndex === 0 ? ` aria-sort="${sort.direction === "asc" ? "ascending" : "descending"}"` : ""}><button type="button" data-sort="${escapeHTML(column)}" title="Click to sort only by this column. Shift-click to add, reverse, or remove it from multi-column sorting." aria-label="Sort by ${escapeHTML(labelFor(column))}; currently ${sortState}. Shift-click to add, reverse, or remove this criterion.">${escapeHTML(labelFor(column))}${indicator}</button></th>`;
+      }).join("")}</tr>`;
       $("#tableBody").innerHTML = pageRows.map(row => `<tr><td><input type="checkbox" data-row-id="${escapeHTML(row.__rowId)}" aria-label="Select voter row" ${state.selected.has(row.__rowId) ? "checked" : ""}></td>${state.viewColumns.map(column => `<td class="${HINDI_FIELDS.has(column) ? "hindi" : ""}" title="${escapeHTML(row[column] || "")}">${cellHTML(column, row[column])}</td>`).join("")}</tr>`).join("");
       $("#emptyTable").hidden = state.filtered.length !== 0;
-      $("#tableSummary").textContent = `${nf.format(state.filtered.length)} matching · ${nf.format(state.selected.size)} selected · sorted by ${labelFor(state.sortColumn)}`;
+      const sortSummary = state.sortColumns.map(sort => `${labelFor(sort.column)} ${sort.direction === "asc" ? "↑" : "↓"}`).join(", ");
+      $("#tableSummary").textContent = `${nf.format(state.filtered.length)} matching · ${nf.format(state.selected.size)} selected · ${sortSummary ? `sorted by ${sortSummary}` : "original row order"}`;
       $("#pageStatus").textContent = state.filtered.length ? `Page ${state.page} of ${totalPages} · rows ${nf.format(start + 1)}–${nf.format(Math.min(start + state.pageSize, state.filtered.length))}` : "Page 1 of 1";
       $("#prevPage").disabled = state.page <= 1;
       $("#nextPage").disabled = state.page >= totalPages;
@@ -1144,8 +1170,8 @@
 
     function resetTable() {
       state.viewColumns = DEFAULT_VIEW.filter(column => state.columns.includes(column));
-      state.sortColumn = "serial_number";
-      state.sortDirection = "asc";
+      state.sortColumns = [{column: state.columns.includes("serial_number") ? "serial_number" : state.columns[0], direction: "asc"}];
+      state.allowEmptySort = false;
       state.pageSize = 50;
       state.page = 1;
       $("#pageSize").value = "50";
@@ -1170,8 +1196,8 @@
       state.advancedRules = [];
       state.viewColumns = DEFAULT_VIEW.filter(column => state.columns.includes(column));
       state.printColumns = DEFAULT_PRINT.filter(column => state.columns.includes(column));
-      state.sortColumn = "serial_number";
-      state.sortDirection = "asc";
+      state.sortColumns = state.columns.length ? [{column: state.columns.includes("serial_number") ? "serial_number" : state.columns[0], direction: "asc"}] : [];
+      state.allowEmptySort = false;
       state.pageSize = 50;
       state.page = 1;
       state.savedPrintScope = "filtered";
@@ -1348,8 +1374,22 @@
       const sort = event.target.closest("[data-sort]");
       if (sort) {
         const column = sort.dataset.sort;
-        if (state.sortColumn === column) state.sortDirection = state.sortDirection === "asc" ? "desc" : "asc";
-        else { state.sortColumn = column; state.sortDirection = "asc"; }
+        const existingIndex = state.sortColumns.findIndex(item => item.column === column);
+        if (event.shiftKey) {
+          if (existingIndex === -1) {
+            state.sortColumns.push({column, direction: "asc"});
+            state.allowEmptySort = false;
+          }
+          else if (state.sortColumns[existingIndex].direction === "asc") state.sortColumns[existingIndex].direction = "desc";
+          else {
+            state.sortColumns.splice(existingIndex, 1);
+            state.allowEmptySort = state.sortColumns.length === 0;
+          }
+        } else {
+          const direction = existingIndex === -1 || state.sortColumns[existingIndex].direction === "desc" ? "asc" : "desc";
+          state.sortColumns = [{column, direction}];
+          state.allowEmptySort = false;
+        }
         sortFilteredRows(); renderTable(); savePreferences();
       }
       const move = event.target.closest("[data-move-column]");
