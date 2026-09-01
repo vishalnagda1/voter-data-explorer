@@ -52,6 +52,15 @@ class DashboardArtifactTests(unittest.TestCase):
         self.assertIn('function reorderColumn(', self.html)
         self.assertIn('Surname counts are a community-name proxy only.', self.html)
 
+    def test_column_manager_uses_single_ordered_list_and_drag_handle(self):
+        self.assertIn('.column-grid { display: flex; flex-direction: column;', self.html)
+        self.assertIn('class="drag-handle ${active ? "" : "is-disabled"}"', self.html)
+        self.assertIn('data-column-item=', self.html)
+        self.assertIn('drop-before', self.html)
+        self.assertIn('drop-after', self.html)
+        self.assertIn('position = "before"', self.html)
+        self.assertIn('Drag ⋮⋮ to reorder', self.html)
+
     @unittest.skipUnless(shutil.which("node"), "Node.js is required for JavaScript syntax validation")
     def test_embedded_javascript_has_valid_syntax(self):
         scripts = re.findall(r"<script(?:\s[^>]*)?>([\s\S]*?)</script>", self.html)

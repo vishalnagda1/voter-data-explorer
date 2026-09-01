@@ -29,6 +29,6 @@ Open `voter_dashboard.html` directly in a modern browser and select the generate
 
 ## PDF converter
 
-The repository also includes `voter_pdf_to_csv.py`, an offline converter for the supported Rajasthan municipal voter-roll PDF layout. On macOS, run `setup_voter_converter.sh` once and then open `run_voter_converter.command` for the interactive workflow.
+The repository also includes `voter_pdf_to_csv.py`, an offline converter for the supported Rajasthan municipal voter-roll PDF layout. Install [uv](https://docs.astral.sh/uv/), then double-click `run_voter_converter.command`. Its interactive menu can either extract PDFs into CSV files or refresh English transliteration in existing converter CSV files without rerunning PDF extraction or OCR.
 
-Every successful conversion produces a UTF-8 CSV and a validation report. English names are transliterations and review flags should be checked before official use.
+Every successful conversion produces a UTF-8 CSV and a validation report. Verified preferred spellings come from `transliteration_overrides.json`; other English names use a Hindi-aware transliteration engine and remain flagged for review before official use.

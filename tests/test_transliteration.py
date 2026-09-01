@@ -38,6 +38,20 @@ class TransliterationTests(unittest.TestCase):
         self.assertTrue(first_review)
         self.assertTrue(second_review)
 
+    def test_rule_engine_improves_common_unknown_names_but_keeps_review_flag(self):
+        expected = {
+            "राजेश": "Rajesh",
+            "महेंद्र": "Mahendra",
+            "धर्मेंद्र": "Dharmendra",
+            "रवीन्द्र": "Ravindra",
+            "ओमप्रकाश": "Omaprakash",
+        }
+        for hindi, english in expected.items():
+            with self.subTest(hindi=hindi):
+                result, needs_review = transliterate_text(hindi, {})
+                self.assertEqual(result, english)
+                self.assertTrue(needs_review)
+
     def test_decomposed_nukta_letters_are_transliterated(self):
         result, needs_review = transliterate_text("फ़ैज़", {})
         self.assertEqual(result, "Faiz")
@@ -48,6 +62,17 @@ class TransliterationTests(unittest.TestCase):
             "राम लाल", {"राम लाल": "Ramlal"}
         )
         self.assertEqual(result, "Ramlal")
+        self.assertFalse(needs_review)
+
+    def test_full_name_override_is_used_by_csv_name_path(self):
+        result = english_name("राम लाल", {"राम लाल": "Ramlal"})
+        self.assertEqual(result.full, "Ramlal")
+        self.assertEqual((result.first, result.middle, result.last), ("Ramlal", "", ""))
+        self.assertFalse(result.needs_review)
+
+    def test_zero_width_characters_do_not_bypass_an_override(self):
+        result, needs_review = transliterate_text("सु\u200dरेश", {"सुरेश": "Suresh"})
+        self.assertEqual(result, "Suresh")
         self.assertFalse(needs_review)
 
     def test_csv_row_transliterates_voter_and_relative_names(self):

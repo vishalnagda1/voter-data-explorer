@@ -6,8 +6,9 @@ VENV_PYTHON="$SCRIPT_DIR/.venv-voter/bin/python"
 
 cd "$SCRIPT_DIR"
 
-if [ ! -x "$VENV_PYTHON" ]; then
-  echo "The converter has not been set up yet."
+if [ ! -x "$VENV_PYTHON" ] || \
+   ! "$VENV_PYTHON" -c "import pypdf, indic_transliteration" >/dev/null 2>&1; then
+  echo "The converter environment is missing or needs an update."
   read -r -p "Run first-time setup now? [Y/n] " answer
   answer="${answer:-y}"
   if [[ "$answer" =~ ^[Yy]$ ]]; then

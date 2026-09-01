@@ -7,40 +7,50 @@ TESSDATA_DIR="$SCRIPT_DIR/tessdata"
 
 cd "$SCRIPT_DIR"
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "Python 3 was not found. Install Python 3 and run this setup again."
-  exit 1
-fi
-
-if ! command -v gs >/dev/null 2>&1; then
-  echo "Ghostscript was not found."
-  echo "macOS: brew install ghostscript"
-  echo "Ubuntu/Debian: sudo apt-get install ghostscript"
-  exit 1
-fi
-
-if ! command -v tesseract >/dev/null 2>&1; then
-  echo "Tesseract OCR was not found."
-  echo "macOS: brew install tesseract"
-  echo "Ubuntu/Debian: sudo apt-get install tesseract-ocr"
+if ! command -v uv >/dev/null 2>&1; then
+  echo "uv was not found. Install it and run this setup again."
+  echo "macOS: brew install uv"
+  echo "Other platforms: https://docs.astral.sh/uv/getting-started/installation/"
   exit 1
 fi
 
 echo "Creating the private Python environment..."
-python3 -m venv "$VENV_DIR"
-"$VENV_DIR/bin/python" -m pip install --upgrade pip
-"$VENV_DIR/bin/python" -m pip install -r "$SCRIPT_DIR/requirements-voter-converter.txt"
+if [ ! -x "$VENV_DIR/bin/python" ]; then
+  uv venv "$VENV_DIR"
+fi
+uv pip install --python "$VENV_DIR/bin/python" \
+  -r "$SCRIPT_DIR/requirements-voter-converter.txt"
 
-mkdir -p "$TESSDATA_DIR"
-if [ ! -f "$TESSDATA_DIR/hin.traineddata" ]; then
-  if ! command -v curl >/dev/null 2>&1; then
-    echo "curl is required to download the official Hindi OCR model."
-    exit 1
+if command -v tesseract >/dev/null 2>&1; then
+  mkdir -p "$TESSDATA_DIR"
+fi
+if command -v tesseract >/dev/null 2>&1 && [ ! -f "$TESSDATA_DIR/hin.traineddata" ]; then
+  if command -v curl >/dev/null 2>&1; then
+    TESSDATA_DOWNLOAD="$TESSDATA_DIR/hin.traineddata.download"
+    echo "Downloading the official Tesseract Hindi OCR model..."
+    if curl -L --fail --show-error \
+      -o "$TESSDATA_DOWNLOAD" \
+      "https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/main/hin.traineddata"; then
+      mv "$TESSDATA_DOWNLOAD" "$TESSDATA_DIR/hin.traineddata"
+    else
+      echo "Warning: Hindi OCR model download failed. CSV transliteration is ready,"
+      echo "but PDF conversion will need the Hindi Tesseract model."
+    fi
+  else
+    echo "Note: curl was not found, so the Hindi OCR model was not downloaded."
+    echo "CSV transliteration is ready; PDF conversion still requires that model."
   fi
-  echo "Downloading the official Tesseract Hindi OCR model..."
-  curl -L --fail --show-error \
-    -o "$TESSDATA_DIR/hin.traineddata" \
-    "https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/main/hin.traineddata"
+fi
+
+if ! command -v gs >/dev/null 2>&1; then
+  echo
+  echo "Note: Ghostscript was not found. CSV transliteration is ready, but PDF"
+  echo "conversion requires Ghostscript (macOS: brew install ghostscript)."
+fi
+if ! command -v tesseract >/dev/null 2>&1; then
+  echo
+  echo "Note: Tesseract was not found. CSV transliteration is ready, but PDF"
+  echo "conversion requires Tesseract OCR (macOS: brew install tesseract)."
 fi
 
 echo

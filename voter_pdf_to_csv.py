@@ -36,13 +36,19 @@ import unicodedata
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 
 try:
     from pypdf import PdfReader
 except ImportError as exc:  # pragma: no cover - dependency failure path
-    raise SystemExit("Missing Python dependency: install it with 'python3 -m pip install pypdf'.") from exc
+    raise SystemExit("Missing Python dependency: run './setup_voter_converter.sh'.") from exc
+
+try:
+    from indic_transliteration import sanscript
+except ImportError:  # pragma: no cover - the built-in fallback remains usable
+    sanscript = None
 
 
 ID_RE = re.compile(r"^(?:[A-Z]{3}\d{7}|RJ/\d{2}/\d{3}/\d+)$")
@@ -93,6 +99,21 @@ CSV_FIELDS = [
     "relative_name_ocr_confidence",
     "needs_review",
 ]
+VOTER_ENGLISH_FIELDS = (
+    "name_english",
+    "english_first_name",
+    "english_middle_name",
+    "english_last_name",
+    "english_name_needs_review",
+)
+RELATIVE_ENGLISH_FIELDS = (
+    "relative_name_english",
+    "relative_english_first_name",
+    "relative_english_middle_name",
+    "relative_english_last_name",
+    "relative_english_name_needs_review",
+)
+ENGLISH_TRANSLITERATION_FIELDS = VOTER_ENGLISH_FIELDS + RELATIVE_ENGLISH_FIELDS
 
 
 class ConversionError(RuntimeError):
@@ -180,6 +201,12 @@ def normalized(text: str) -> str:
     return " ".join((text or "").replace("\n", " ").split())
 
 
+def normalized_transliteration_source(text: str) -> str:
+    """Normalize equivalent Devanagari spellings before dictionary lookup."""
+    value = unicodedata.normalize("NFC", normalized(text))
+    return value.replace("\u200c", "").replace("\u200d", "")
+
+
 def split_name(full_name: str) -> NameParts:
     """Split a name without changing or discarding any of its words.
 
@@ -221,7 +248,7 @@ def load_transliteration_overrides(path: Path | None) -> dict[str, str]:
     for hindi, english in raw.items():
         if not isinstance(hindi, str) or not isinstance(english, str):
             raise ConversionError("Every transliteration override key and value must be a string.")
-        key = normalized(hindi)
+        key = normalized_transliteration_source(hindi)
         value = normalized(english)
         if not key or not value:
             raise ConversionError("Transliteration override keys and values cannot be blank.")
@@ -278,10 +305,49 @@ def _fallback_transliterate_word(word: str) -> str:
     return result[:1].upper() + result[1:] if result else ""
 
 
+def _roman_title(text: str) -> str:
+    """Format a generated ASCII romanization like a personal name."""
+    return re.sub(
+        r"[A-Za-z]+",
+        lambda match: match.group(0)[:1].upper() + match.group(0)[1:].lower(),
+        normalized(text),
+    )
+
+
+@lru_cache(maxsize=8192)
+def _library_transliterate_word(word: str) -> str:
+    """Use a maintained Indic engine, retaining the local algorithm as backup."""
+    if sanscript is None:
+        return _fallback_transliterate_word(word)
+    try:
+        roman = sanscript.transliterate(
+            normalized_transliteration_source(word),
+            sanscript.DEVANAGARI,
+            sanscript.OPTITRANS,
+        )
+        roman = sanscript.SCHEMES[sanscript.OPTITRANS].to_lay_indian(roman)
+        # OPTITRANS preserves Sanskrit-style final schwas. Hindi personal names
+        # conventionally omit the final short "a" (rajesha -> Rajesh).
+        if (
+            len(roman) > 2
+            and roman.endswith("a")
+            and not roman.endswith(("dra", "tra"))
+        ):
+            roman = roman[:-1]
+        # Normalize an anusvara before dental consonants for common Hindi names
+        # such as महेंद्र (mahemdra -> Mahendra).
+        roman = re.sub(r"m(?=[dtn])", "n", roman)
+        if roman and roman.isascii() and re.fullmatch(r"[A-Za-z0-9 .'-]+", roman):
+            return _roman_title(roman)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        pass
+    return _fallback_transliterate_word(word)
+
+
 def transliterate_text(text: str, overrides: dict[str, str] | None = None) -> tuple[str, bool]:
-    """Transliterate text word-by-word; fallback spellings require review."""
+    """Transliterate text word-by-word; generated spellings require review."""
     overrides = overrides or {}
-    source = normalized(text)
+    source = normalized_transliteration_source(text)
     if not source:
         return "", True
     if source in overrides:
@@ -292,13 +358,25 @@ def transliterate_text(text: str, overrides: dict[str, str] | None = None) -> tu
         if word in overrides:
             output.append(overrides[word])
         else:
-            output.append(_fallback_transliterate_word(word))
+            output.append(_library_transliterate_word(word))
             needs_review = True
     return normalized(" ".join(output)), needs_review
 
 
 def english_name(full_name: str, overrides: dict[str, str] | None = None) -> EnglishName:
     """Split the Hindi name and transliterate each component consistently."""
+    overrides = overrides or {}
+    source = normalized_transliteration_source(full_name)
+    if source in overrides:
+        full = overrides[source]
+        english_parts = split_name(full)
+        return EnglishName(
+            full,
+            english_parts.first,
+            english_parts.middle,
+            english_parts.last,
+            False,
+        )
     parts = split_name(full_name)
     first, first_review = transliterate_text(parts.first, overrides)
     middle, middle_review = transliterate_text(parts.middle, overrides) if parts.middle else ("", False)
@@ -1019,6 +1097,111 @@ def verify_written_csv(
             )
 
 
+def _set_english_fields(row: dict[str, str], result: EnglishName, *, relative: bool) -> None:
+    prefix = "relative_" if relative else ""
+    row[f"{prefix}name_english"] = result.full
+    row[f"{prefix}english_first_name"] = result.first
+    row[f"{prefix}english_middle_name"] = result.middle
+    row[f"{prefix}english_last_name"] = result.last
+    row[f"{prefix}english_name_needs_review"] = "Yes" if result.needs_review else "No"
+
+
+def retransliterate_csv(
+    source: Path,
+    output_dir: Path,
+    transliteration_overrides: dict[str, str] | None = None,
+    *,
+    force: bool = False,
+    overwrite: bool = False,
+) -> tuple[Path, dict]:
+    """Refresh existing English-name columns without rerunning PDF extraction or OCR."""
+    output = output_dir / source.name
+    audit_output = output_dir / f"{source.stem}.transliteration.validation.json"
+    if output.exists() and not overwrite:
+        raise ConversionError(f"Output already exists (choose overwrite when prompted): {output}")
+
+    with source.open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        fieldnames = reader.fieldnames
+        rows = list(reader)
+    if not fieldnames:
+        raise ConversionError(f"CSV has no header row: {source}")
+    required = {"name_hindi", "relative_name_hindi", *ENGLISH_TRANSLITERATION_FIELDS}
+    missing = [field for field in CSV_FIELDS if field in required and field not in fieldnames]
+    if missing:
+        raise ConversionError(
+            f"CSV is missing required transliteration columns: {', '.join(missing)}"
+        )
+    if any(None in row for row in rows):
+        raise ConversionError("CSV contains a row with more values than its header.")
+
+    original_rows = [dict(row) for row in rows]
+    voter_updates = 0
+    relative_updates = 0
+    for row_number, row in enumerate(rows, 2):
+        voter_hindi = normalized(row["name_hindi"])
+        relative_hindi = normalized(row["relative_name_hindi"])
+        if not voter_hindi or not relative_hindi:
+            raise ConversionError(f"Blank Hindi voter or relative name at CSV row {row_number}.")
+
+        update_voter = (
+            force
+            or not normalized(row["name_english"])
+            or row["english_name_needs_review"].strip().casefold() == "yes"
+        )
+        update_relative = (
+            force
+            or not normalized(row["relative_name_english"])
+            or row["relative_english_name_needs_review"].strip().casefold() == "yes"
+        )
+        if update_voter:
+            _set_english_fields(
+                row,
+                english_name(voter_hindi, transliteration_overrides),
+                relative=False,
+            )
+            voter_updates += 1
+        if update_relative:
+            _set_english_fields(
+                row,
+                english_name(relative_hindi, transliteration_overrides),
+                relative=True,
+            )
+            relative_updates += 1
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+
+    with temporary.open(encoding="utf-8-sig", newline="") as handle:
+        written_reader = csv.DictReader(handle)
+        written_rows = list(written_reader)
+    if written_reader.fieldnames != fieldnames or written_rows != rows:
+        raise ConversionError("CSV changed unexpectedly during transliteration write-back.")
+    untouched_fields = [field for field in fieldnames if field not in ENGLISH_TRANSLITERATION_FIELDS]
+    for before, after in zip(original_rows, written_rows):
+        if any(before[field] != after[field] for field in untouched_fields):
+            raise ConversionError("A non-English CSV value changed during retransliteration.")
+    os.replace(temporary, output)
+
+    audit = {
+        "result": "PASS",
+        "operation": "CSV retransliteration only; PDF extraction and OCR were skipped",
+        "source_csv": str(source.resolve()),
+        "output_csv": str(output.resolve()),
+        "row_count": len(rows),
+        "voter_names_updated": voter_updates,
+        "relative_names_updated": relative_updates,
+        "force_retransliterate": force,
+        "preserved_columns": untouched_fields,
+    }
+    audit_output.write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
+    return output, audit
+
+
 def convert_one(pdf: Path, args, tools: dict[str, str]) -> tuple[Path, dict]:
     output = args.output_dir / f"{pdf.stem}.csv"
     audit_output = args.output_dir / f"{pdf.stem}.validation.json"
@@ -1065,7 +1248,10 @@ def convert_one(pdf: Path, args, tools: dict[str, str]) -> tuple[Path, dict]:
                 "relative_review_threshold": args.relative_confidence,
             },
             "transliteration": {
-                "method": "deterministic Hindi-to-Roman transliteration with preferred-spelling overrides",
+                "method": (
+                    "preferred-spelling overrides, then indic-transliteration OPTITRANS, "
+                    "then deterministic built-in fallback"
+                ),
                 "override_file": str(args.transliteration_overrides.resolve())
                 if args.transliteration_overrides
                 else None,
@@ -1116,6 +1302,23 @@ def collect_pdfs(inputs: list[Path], recursive: bool) -> list[Path]:
     return unique
 
 
+def collect_csvs(inputs: list[Path], recursive: bool) -> list[Path]:
+    csvs: list[Path] = []
+    for value in inputs:
+        path = value.expanduser()
+        if path.is_file() and path.suffix.lower() == ".csv":
+            csvs.append(path.resolve())
+        elif path.is_dir():
+            candidates = path.rglob("*") if recursive else path.iterdir()
+            csvs.extend(item.resolve() for item in candidates if item.is_file() and item.suffix.lower() == ".csv")
+        else:
+            raise ConversionError(f"Input is not a CSV file or directory: {value}")
+    unique = sorted(set(csvs))
+    if not unique:
+        raise ConversionError("No CSV files were found.")
+    return unique
+
+
 def parse_selection(value: str, count: int) -> list[int]:
     value = value.strip().lower()
     if value in {"", "a", "all"}:
@@ -1146,34 +1349,78 @@ def ask(prompt: str, default: str = "") -> str:
 
 def interactive_argv() -> list[str]:
     print("\n┌──────────────────────────────────────────────┐")
-    print("│     Rajasthan Voter PDF → CSV Converter     │")
+    print("│        Rajasthan Voter Data Converter       │")
     print("└──────────────────────────────────────────────┘")
-    print("Strict totals validation • Hindi OCR • English names • Batch mode\n")
+    print("Hindi OCR • English transliteration • CSV refresh • Batch mode\n")
+
+    print("What would you like to do?")
+    print("  1. Extract voter PDFs and create CSV files")
+    print("  2. Update English transliteration in existing CSV files")
     while True:
-        folder_text = ask("Folder containing voter PDFs", str(Path.cwd()))
+        mode = ask("Choose 1 or 2", "1")
+        if mode in {"1", "2"}:
+            break
+        print("  Please enter 1 or 2.\n")
+
+    is_csv_mode = mode == "2"
+    file_label = "CSV" if is_csv_mode else "PDF"
+    while True:
+        folder_text = ask(f"Folder containing voter {file_label} files", str(Path.cwd()))
         folder = Path(folder_text).expanduser().resolve()
         if not folder.is_dir():
             print("  That folder does not exist. Please try again.\n")
             continue
-        recursive = ask("Include PDFs in subfolders? (y/N)", "n").lower().startswith("y")
-        pdfs = sorted(folder.rglob("*.pdf") if recursive else folder.glob("*.pdf"))
-        if not pdfs:
-            print("  No PDF files were found there. Please try again.\n")
+        recursive = ask(f"Include {file_label} files in subfolders? (y/N)", "n").lower().startswith("y")
+        files = sorted(
+            item
+            for item in (folder.rglob("*") if recursive else folder.iterdir())
+            if item.is_file() and item.suffix.lower() == f".{file_label.lower()}"
+        )
+        if not files:
+            print(f"  No {file_label} files were found there. Please try again.\n")
             continue
         break
 
-    print(f"\nFound {len(pdfs)} PDF file(s):")
-    for index, pdf in enumerate(pdfs, 1):
-        label = str(pdf.relative_to(folder)) if recursive else pdf.name
+    print(f"\nFound {len(files)} {file_label} file(s):")
+    for index, item in enumerate(files, 1):
+        label = str(item.relative_to(folder)) if recursive else item.name
         print(f"  {index:>3}. {label}")
     while True:
         try:
             selection = parse_selection(
-                ask("Select files (all, 1,3, 2-5)", "all"), len(pdfs)
+                ask("Select files (all, 1,3, 2-5)", "all"), len(files)
             )
             break
         except (ValueError, TypeError):
             print("  Invalid selection. Use 'all', a number, commas, or a range.\n")
+
+    chosen = [files[index] for index in selection]
+    if is_csv_mode:
+        output_dir = Path(
+            ask("Output folder", str(folder / "retransliterated_csv"))
+        ).expanduser().resolve()
+        force = ask(
+            "Regenerate all English names, including reviewed ones? (y/N)", "n"
+        ).lower().startswith("y")
+        overwrite = ask("Overwrite existing output files? (y/N)", "n").lower().startswith("y")
+        print("\nReady:")
+        print(f"  CSV files:   {len(chosen)}")
+        print(f"  Output:      {output_dir}")
+        print("  PDF/OCR:     skipped")
+        print(f"  Update mode: {'all English names' if force else 'blank or review-needed names only'}")
+        if not ask("Start CSV transliteration update? (Y/n)", "y").lower().startswith("y"):
+            raise SystemExit("Cancelled.")
+        argv = [str(item) for item in chosen] + [
+            "--retransliterate-csv",
+            "--output-dir",
+            str(output_dir),
+        ]
+        if force:
+            argv.append("--force-retransliterate")
+        if overwrite:
+            argv.append("--overwrite")
+        print()
+        return argv
 
     output_dir = Path(ask("Output folder", str(folder / "voter_csv"))).expanduser().resolve()
     fail_on_review = ask(
@@ -1182,7 +1429,6 @@ def interactive_argv() -> list[str]:
     jobs = ask("Parallel OCR jobs", str(min(4, os.cpu_count() or 1)))
     overwrite = ask("Overwrite existing CSV files? (y/N)", "n").lower().startswith("y")
 
-    chosen = [pdfs[index] for index in selection]
     print("\nReady:")
     print(f"  PDFs:        {len(chosen)}")
     print(f"  Output:      {output_dir}")
@@ -1190,7 +1436,7 @@ def interactive_argv() -> list[str]:
     print(f"  Review mode: {'fail when review is needed' if fail_on_review else 'flag rows in CSV'}")
     if not ask("Start conversion? (Y/n)", "y").lower().startswith("y"):
         raise SystemExit("Cancelled.")
-    argv = [str(pdf) for pdf in chosen] + ["--output-dir", str(output_dir), "--jobs", jobs]
+    argv = [str(item) for item in chosen] + ["--output-dir", str(output_dir), "--jobs", jobs]
     if fail_on_review:
         argv.append("--fail-on-review")
     if overwrite:
@@ -1201,21 +1447,26 @@ def interactive_argv() -> list[str]:
 
 def parse_args(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(
-        description="Convert Rajasthan municipal voter-list PDFs to strictly validated CSV files.",
+        description=(
+            "Convert Rajasthan municipal voter-list PDFs or refresh transliteration "
+            "in existing converter CSV files."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Dependencies:
-  Python package: pypdf
+  Python packages: see requirements-voter-converter.txt
   Commands: Ghostscript (gs), Tesseract OCR, and the Tesseract Hindi model (hin)
 
 macOS with Homebrew:
-  brew install ghostscript tesseract tesseract-lang
-  python3 -m pip install pypdf
+  brew install uv ghostscript tesseract tesseract-lang
+  ./setup_voter_converter.sh
 
 Ubuntu/Debian:
   sudo apt-get install ghostscript tesseract-ocr tesseract-ocr-hin
-  python3 -m pip install pypdf
+  Install uv, then run ./setup_voter_converter.sh
 
 Each successful PDF produces a .csv file and a .validation.json audit report.
+CSV retransliteration mode skips PDF extraction and OCR and updates only the
+existing English-name columns.
 Rows with uncertain Hindi OCR are retained and marked needs_review=Yes.
 English spellings are transliterations, not legal translations. Unknown spellings
 are retained and marked english_name_needs_review=Yes. Preferred spellings can be
@@ -1223,10 +1474,25 @@ added to transliteration_overrides.json.
 Use --fail-on-review when a nonzero exit status is required for those rows.
 """,
     )
-    parser.add_argument("inputs", nargs="+", type=Path, help="PDF file(s) or directories containing PDFs")
+    parser.add_argument(
+        "inputs",
+        nargs="+",
+        type=Path,
+        help="PDF/CSV file(s), or directories containing the selected file type",
+    )
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/voter_csv"))
     parser.add_argument("--recursive", action="store_true", help="Search input directories recursively")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--retransliterate-csv",
+        action="store_true",
+        help="Update English transliteration in compatible CSV files without OCR",
+    )
+    parser.add_argument(
+        "--force-retransliterate",
+        action="store_true",
+        help="In CSV mode, regenerate reviewed English names as well",
+    )
     parser.add_argument("--jobs", type=int, default=min(4, os.cpu_count() or 1))
     parser.add_argument("--dpi", type=int, default=300)
     parser.add_argument("--tessdata-dir", type=Path)
@@ -1247,6 +1513,8 @@ Use --fail-on-review when a nonzero exit status is required for those rows.
         parser.error("--jobs must be at least 1")
     if not 200 <= args.dpi <= 600:
         parser.error("--dpi must be between 200 and 600")
+    if args.force_retransliterate and not args.retransliterate_csv:
+        parser.error("--force-retransliterate requires --retransliterate-csv")
     if args.tessdata_dir:
         args.tessdata_dir = args.tessdata_dir.expanduser().resolve()
     else:
@@ -1266,6 +1534,37 @@ def main(argv: list[str] | None = None) -> int:
     if argv is None and len(sys.argv) == 1:
         argv = interactive_argv()
     args = parse_args(argv)
+    if args.retransliterate_csv:
+        try:
+            csvs = collect_csvs(args.inputs, args.recursive)
+            transliteration_overrides = load_transliteration_overrides(
+                args.transliteration_overrides
+            )
+        except ConversionError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+
+        failures = 0
+        for index, source in enumerate(csvs, 1):
+            print(f"[{index}/{len(csvs)}] {source.name}")
+            try:
+                output, audit = retransliterate_csv(
+                    source,
+                    args.output_dir,
+                    transliteration_overrides,
+                    force=args.force_retransliterate,
+                    overwrite=args.overwrite,
+                )
+                print(
+                    f"  PASS: {output} | rows={audit['row_count']} "
+                    f"voter_names_updated={audit['voter_names_updated']} "
+                    f"relative_names_updated={audit['relative_names_updated']}"
+                )
+            except (ConversionError, OSError, ValueError) as exc:
+                failures += 1
+                print(f"  FAILED: {exc}", file=sys.stderr)
+        return 1 if failures else 0
+
     try:
         pdfs = collect_pdfs(args.inputs, args.recursive)
         tools = {

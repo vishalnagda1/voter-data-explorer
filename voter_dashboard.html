@@ -370,6 +370,7 @@
       border-radius: 18px;
       box-shadow: 0 28px 80px rgba(18,39,44,.3);
     }
+    #columnDialog { width: min(760px, calc(100% - 28px)); }
     dialog::backdrop { background: rgba(12,31,35,.58); backdrop-filter: blur(3px); }
     .dialog-head { display: flex; align-items: start; justify-content: space-between; gap: 20px; padding: 20px 22px 15px; border-bottom: 1px solid var(--line); }
     .dialog-head h2 { margin: 0; font-family: Georgia, serif; font-size: 24px; }
@@ -382,12 +383,21 @@
     .modal-section h3 { margin: 0 0 5px; font-size: 14px; }
     .modal-section > p { margin: 0 0 12px; color: var(--muted); font-size: 11px; }
     .preset-row { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 12px; }
-    .column-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 12px; }
-    .check-item { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto; align-items: center; gap: 7px; min-width: 0; padding: 7px 8px; border: 1px solid transparent; border-radius: 8px; }
-    .check-item:hover { background: var(--teal-soft); }
+    .column-grid { display: flex; flex-direction: column; gap: 6px; max-height: 380px; overflow: auto; padding: 8px; background: #f6f3ec; border: 1px solid var(--line); border-radius: 12px; }
+    .column-group-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 5px 7px 3px; color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .column-group-label:not(:first-child) { margin-top: 7px; padding-top: 12px; border-top: 1px solid var(--line); }
+    .column-group-label small { font-size: 9px; font-weight: 700; letter-spacing: 0; text-transform: none; }
+    .check-item { position: relative; display: grid; grid-template-columns: 28px auto auto minmax(0, 1fr) auto auto; align-items: center; gap: 8px; min-width: 0; min-height: 42px; padding: 6px 8px; background: rgba(255,255,255,.72); border: 1px solid transparent; border-radius: 9px; transition: border-color .15s, box-shadow .15s, transform .15s, background .15s; }
+    .check-item:hover { background: #fff; border-color: #d8e2df; }
     .check-item span { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-    .check-item.is-selected { background: #f7fbfa; border-color: #cfe0de; }
-    .check-item.dragging { opacity: .45; }
+    .check-item.is-selected { background: #fff; border-color: #c7dcda; box-shadow: 0 2px 8px rgba(17,61,63,.06); }
+    .check-item.dragging { opacity: .38; transform: scale(.985); }
+    .check-item.drop-before { box-shadow: inset 0 3px 0 var(--saffron); }
+    .check-item.drop-after { box-shadow: inset 0 -3px 0 var(--saffron); }
+    .drag-handle { display: grid; place-items: center; width: 28px; height: 28px; color: var(--teal-dark); background: var(--teal-soft); border: 1px solid #c8ddda; border-radius: 7px; cursor: grab; font-size: 15px !important; font-weight: 900; letter-spacing: -3px; user-select: none; }
+    .drag-handle:active { cursor: grabbing; }
+    .drag-handle.is-disabled { color: #aaa49a; background: #eeebe5; border-color: transparent; cursor: default; }
+    .column-name { font-weight: 700; }
     .sequence-badge { display: grid; place-items: center; width: 22px; height: 22px; color: var(--teal-dark); background: var(--teal-soft); border-radius: 7px; font-size: 10px; font-weight: 800; }
     .move-button { width: 26px; height: 26px; padding: 0; color: var(--muted); background: #fff; border: 1px solid var(--line); border-radius: 7px; line-height: 1; }
     .move-button:disabled { cursor: default; opacity: .3; }
@@ -449,7 +459,7 @@
       .kpi:nth-child(-n+4) { border-bottom: 1px solid var(--line); }
       .analytics-grid { grid-template-columns: 1fr; }
       .chart-card, .chart-card.wide { grid-column: 1; }
-      .column-grid { grid-template-columns: 1fr; }
+      .column-grid { max-height: 330px; }
       .print-options { grid-template-columns: 1fr; }
       .rule-row { grid-template-columns: 1fr 1fr 40px; }
       .rule-value { grid-column: 1 / 3; grid-row: 2; }
@@ -587,11 +597,11 @@
     <div class="dialog-head"><div><h2>Columns &amp; print setup</h2><p>Screen and A4 output can use different column sets.</p></div><button class="dialog-close" data-close="columnDialog" type="button" aria-label="Close">×</button></div>
     <div class="dialog-body">
       <section class="modal-section">
-        <h3>Visible table columns</h3><p>Choose columns, then drag selected items or use the arrow buttons to change their sequence.</p>
+        <h3>Visible table columns</h3><p>Selected columns appear first in their exact table order. Drag the ⋮⋮ handle to place a column anywhere, or use the arrow buttons for one-step changes.</p>
         <div class="preset-row" id="viewPresets"></div><div class="column-grid" id="viewColumnGrid"></div>
       </section>
       <section class="modal-section">
-        <h3>Print / PDF columns</h3><p id="printColumnHelp">Choose and reorder columns. Up to five prints in portrait; six or more switches to landscape. In the browser dialog, choose your printer or “Save as PDF”.</p>
+        <h3>Print / PDF columns</h3><p id="printColumnHelp">Selected columns appear first in their exact print order. Drag the ⋮⋮ handle or use the arrows. Up to five prints in portrait; six or more switches to landscape.</p>
         <div class="preset-row" id="printPresets"></div><div class="column-grid" id="printColumnGrid"></div>
       </section>
       <section class="modal-section">
@@ -1239,14 +1249,18 @@
       savePreferences();
     }
 
-    function reorderColumn(kind, sourceColumn, targetColumn) {
+    function reorderColumn(kind, sourceColumn, targetColumn, position = "before") {
       const target = kind === "view" ? state.viewColumns : state.printColumns;
-      const from = target.indexOf(sourceColumn), to = target.indexOf(targetColumn);
-      if (from < 0 || to < 0 || from === to) return;
-      target.splice(to, 0, target.splice(from, 1)[0]);
+      const from = target.indexOf(sourceColumn);
+      if (from < 0 || !target.includes(targetColumn) || sourceColumn === targetColumn) return;
+      const [moved] = target.splice(from, 1);
+      let to = target.indexOf(targetColumn);
+      if (position === "after") to += 1;
+      target.splice(to, 0, moved);
       renderColumnDialog();
       if (kind === "view") renderTable();
       savePreferences();
+      showToast(`${labelFor(sourceColumn)} moved to position ${target.indexOf(sourceColumn) + 1}.`);
     }
 
     function renderColumnDialog() {
@@ -1254,16 +1268,20 @@
       $("#viewPresets").innerHTML = presetButton("view", "default", "Reset visible default") + presetButton("view", "identity", "Identity") + presetButton("view", "names", "Names") + presetButton("view", "demographics", "Demographics") + presetButton("view", "quality", "Quality") + presetButton("view", "all", "All");
       $("#printPresets").innerHTML = presetButton("print", "default", "Reset print default") + presetButton("print", "detailed", "Detailed landscape") + presetButton("print", "identity", "Identity") + presetButton("print", "quality", "Quality") + presetButton("print", "all", "All");
       const grid = (kind, selected) => {
-        const ordered = [...selected, ...state.columns.filter(column => !selected.includes(column))];
-        return ordered.map(column => {
-          const index = selected.indexOf(column), active = index >= 0;
-          return `<div class="check-item ${active ? "is-selected" : ""}" title="${escapeHTML(column)}" draggable="${active}" data-drag-column="${escapeHTML(column)}" data-drag-kind="${kind}">
+        const available = state.columns.filter(column => !selected.includes(column));
+        const item = (column, active) => {
+          const index = selected.indexOf(column);
+          return `<div class="check-item ${active ? "is-selected" : ""}" title="${escapeHTML(column)}" data-column-item="${escapeHTML(column)}" data-column-kind="${kind}">
+            <span class="drag-handle ${active ? "" : "is-disabled"}" ${active ? `draggable="true" data-drag-column="${escapeHTML(column)}" data-drag-kind="${kind}" title="Drag ${escapeHTML(labelFor(column))} to a new position"` : `aria-hidden="true"`}>⋮⋮</span>
             <input type="checkbox" data-column-select="${kind}" value="${escapeHTML(column)}" ${active ? "checked" : ""} aria-label="Show ${escapeHTML(labelFor(column))}">
-            <span class="sequence-badge">${active ? index + 1 : "—"}</span><span>${escapeHTML(labelFor(column))}</span>
+            <span class="sequence-badge">${active ? index + 1 : "—"}</span><span class="column-name">${escapeHTML(labelFor(column))}</span>
             <button class="move-button" type="button" data-move-column="${kind}" data-column-index="${index}" data-direction="-1" aria-label="Move ${escapeHTML(labelFor(column))} earlier" ${!active || index === 0 ? "disabled" : ""}>↑</button>
             <button class="move-button" type="button" data-move-column="${kind}" data-column-index="${index}" data-direction="1" aria-label="Move ${escapeHTML(labelFor(column))} later" ${!active || index === selected.length - 1 ? "disabled" : ""}>↓</button>
           </div>`;
-        }).join("");
+        };
+        return `<div class="column-group-label"><span>Selected · ${selected.length}</span><small>Drag ⋮⋮ to reorder</small></div>
+          ${selected.map(column => item(column, true)).join("")}
+          ${available.length ? `<div class="column-group-label"><span>Available · ${available.length}</span><small>Check to add</small></div>${available.map(column => item(column, false)).join("")}` : ""}`;
       };
       $("#viewColumnGrid").innerHTML = grid("view", state.viewColumns);
       $("#printColumnGrid").innerHTML = grid("print", state.printColumns);
@@ -1433,30 +1451,42 @@
       if (event.target.matches('input[name="printScope"]')) savePreferences();
     });
 
+    function clearColumnDropTargets() {
+      $$(".check-item.drop-before, .check-item.drop-after").forEach(item => item.classList.remove("drop-before", "drop-after"));
+    }
+
     document.addEventListener("dragstart", event => {
-      const item = event.target.closest("[data-drag-column]");
-      if (!item || item.getAttribute("draggable") !== "true") return;
-      state.dragColumn = {column: item.dataset.dragColumn, kind: item.dataset.dragKind};
+      const handle = event.target.closest("[data-drag-column]");
+      if (!handle || handle.getAttribute("draggable") !== "true") return;
+      const item = handle.closest("[data-column-item]");
+      state.dragColumn = {column: handle.dataset.dragColumn, kind: handle.dataset.dragKind};
       item.classList.add("dragging");
       event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("text/plain", item.dataset.dragColumn);
+      event.dataTransfer.setData("text/plain", handle.dataset.dragColumn);
     });
     document.addEventListener("dragover", event => {
-      const item = event.target.closest("[data-drag-column]");
-      if (item && state.dragColumn && item.dataset.dragKind === state.dragColumn.kind && item.getAttribute("draggable") === "true") {
-        event.preventDefault();
-        event.dataTransfer.dropEffect = "move";
-      }
+      const item = event.target.closest("[data-column-item]");
+      if (!item || !state.dragColumn || item.dataset.columnKind !== state.dragColumn.kind || item.dataset.columnItem === state.dragColumn.column) return;
+      const selected = state.dragColumn.kind === "view" ? state.viewColumns : state.printColumns;
+      if (!selected.includes(item.dataset.columnItem)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      const position = event.clientY < item.getBoundingClientRect().top + item.getBoundingClientRect().height / 2 ? "before" : "after";
+      clearColumnDropTargets();
+      item.classList.add(position === "before" ? "drop-before" : "drop-after");
     });
     document.addEventListener("drop", event => {
-      const item = event.target.closest("[data-drag-column]");
-      if (!item || !state.dragColumn || item.dataset.dragKind !== state.dragColumn.kind) return;
+      const item = event.target.closest("[data-column-item]");
+      if (!item || !state.dragColumn || item.dataset.columnKind !== state.dragColumn.kind) return;
       event.preventDefault();
-      reorderColumn(state.dragColumn.kind, state.dragColumn.column, item.dataset.dragColumn);
+      const position = item.classList.contains("drop-after") ? "after" : "before";
+      reorderColumn(state.dragColumn.kind, state.dragColumn.column, item.dataset.columnItem, position);
+      clearColumnDropTargets();
       state.dragColumn = null;
     });
     document.addEventListener("dragend", () => {
       $$(".check-item.dragging").forEach(item => item.classList.remove("dragging"));
+      clearColumnDropTargets();
       state.dragColumn = null;
     });
 
